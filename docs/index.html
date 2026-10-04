@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Air hisob-kitobi</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Air hisob-kitobi</h1>
+      <p class="sub">Бобур chiqargan yuklar va bizning to'lovlar, dollarda ($)</p>
+    </div>
+    <div class="status">
+      <div class="store"><span class="dot" id="storeDot"></span><span id="storeTxt">Ulanmoqda…</span></div>
+      <div class="store"><span class="dot" id="tgDot"></span><span id="tgTxt">Telegram bot</span></div>
+    </div>
+  </header>
+
+  <div class="gate" id="gate" hidden></div>
+
+  <section class="balance" aria-label="Umumiy holat">
+    <div class="main">
+      <div class="k" id="balLabel">Air'ga qarzimiz</div>
+      <div class="v num" id="balVal">0</div>
+      <div class="hint" id="balHint">Yuklar minus to'lovlar</div>
+      <div class="split" aria-hidden="true"><i class="c" id="barCash" style="width:0"></i><i class="b" id="barBank" style="width:0"></i></div>
+    </div>
+    <div><div class="k">Jami yuk</div><div class="v num" id="totShip">0</div><div class="hint" id="cntShip">0 ta ro'yxat</div></div>
+    <div><div class="k">Naqd berildi</div><div class="v num" id="totCash">0</div><div class="hint" id="cntCash">0 marta</div></div>
+    <div><div class="k">Perechisleniya</div><div class="v num" id="totBank">0</div><div class="hint" id="cntBank">0 marta</div></div>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" data-tab="ledger" aria-selected="true">Harakatlar</button>
+    <button type="button" role="tab" data-tab="ship" aria-selected="false">+ Yuk</button>
+    <button type="button" role="tab" data-tab="pay" aria-selected="false">+ To'lov</button>
+    <button type="button" role="tab" data-tab="prod" aria-selected="false">Tovarlar</button>
+  </nav>
+
+  <section class="panel ledger" data-pane="ledger">
+    <div class="ledger-head">
+      <h2>Harakatlar</h2>
+      <div class="row" style="flex:0 1 auto;align-items:center">
+        <span class="period num" id="periodTxt"></span>
+        <select id="monthSel" aria-label="Oy bo'yicha"><option value="">Hamma oylar</option></select>
+      </div>
+    </div>
+    <div id="ledgerRows" class="cards"><div class="empty">Yuklanmoqda…</div></div>
+  </section>
+
+  <form class="panel" id="shipForm" data-pane="ship" autocomplete="off" hidden>
+    <h2><span class="tag ship">YUK</span> Бобур ro'yxati</h2>
+    <div class="editing" id="shipEditing" hidden><span>Tahrirlanmoqda</span><button type="button" class="ghost" id="shipCancel">Bekor qilish</button></div>
+    <div class="row">
+      <label>Sana<input type="date" id="shipDate" required></label>
+      <label>Qayerga (manzil, zakaz)<input type="text" id="shipNote" placeholder="masalan, Bozorga"></label>
+    </div>
+    <label>Telegramdagi ro'yxatni shu yerga joylang
+      <textarea id="shipPaste" placeholder="Bozorga&#10;Osvejitel - 200 k&#10;Air sprey - 15 k"></textarea>
+    </label>
+    <div class="row" style="justify-content:space-between">
+      <span class="example">Birinchi qator manzil, keyin <code>tovar – karobka soni</code>. Narx «Tovarlar» bo'limidan olinadi.</span>
+      <button type="button" id="parseBtn" style="flex:0 0 auto">Ro'yxatni ajratish</button>
+    </div>
+    <div class="tblwrap">
+      <table class="items">
+        <thead><tr><th>Tovar</th><th class="r">Karobka</th><th class="r">Narx $</th><th class="r">Summa</th><th></th></tr></thead>
+        <tbody id="itemRows"></tbody>
+      </table>
+    </div>
+    <div class="total">
+      <button type="button" class="ghost" id="addRow">+ Qator qo'shish</button>
+      <span>Jami: <strong class="num" id="shipTotal">0</strong> $</span>
+    </div>
+    <div class="row" style="justify-content:flex-end"><span class="msg" id="shipMsg"></span><button type="submit" class="primary" style="flex:0 0 auto">Yukni saqlash</button></div>
+  </form>
+
+  <form class="panel" id="payForm" data-pane="pay" autocomplete="off" hidden>
+    <h2><span class="tag cash">TO'LOV</span> Air'ga to'lov</h2>
+    <div class="editing" id="payEditing" hidden><span>Tahrirlanmoqda</span><button type="button" class="ghost" id="payCancel">Bekor qilish</button></div>
+    <div class="seg" role="group" aria-label="To'lov turi">
+      <button type="button" id="mCash" aria-pressed="true">Naqd</button>
+      <button type="button" id="mBank" aria-pressed="false">Perechisleniya</button>
+    </div>
+    <label>Sana<input type="date" id="payDate" required></label>
+    <div class="seg" role="group" aria-label="Valyuta">
+      <button type="button" id="cUsd" aria-pressed="true">Dollar ($)</button>
+      <button type="button" id="cUzs" aria-pressed="false">So'm (kurs bilan)</button>
+    </div>
+    <div class="row">
+      <label>Summa<input type="text" inputmode="decimal" id="payAmount" placeholder="1 000" required></label>
+      <label id="rateWrap" hidden>Kurs, 1$ = so'm<input type="text" inputmode="numeric" id="payRate" placeholder="12 650"></label>
+    </div>
+    <span class="example" id="payConv"></span>
+    <label>Izoh<input type="text" id="payNote" placeholder="kim berdi, qaysi hisobdan…"></label>
+    <div class="row" style="justify-content:flex-end"><span class="msg" id="payMsg"></span><button type="submit" class="primary" style="flex:0 0 auto">To'lovni saqlash</button></div>
+  </form>
+
+  <section class="panel" data-pane="prod" hidden>
+    <h2>Tovarlar bo'yicha jami</h2>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Tovar</th><th class="r">Karobka</th><th class="r">Narx</th><th class="r">Summa</th></tr></thead>
+        <tbody id="prodRows"></tbody>
+      </table>
+    </div>
+    <h2 style="margin-top:8px">1 karobka narxi ($)</h2>
+    <p class="example">Бобур yangi ro'yxat tashlaganda bot shu narxlarni qo'yadi. Eski yuklar o'zgarmaydi.</p>
+    <div class="tblwrap">
+      <table class="items">
+        <thead><tr><th>Tovar</th><th class="r">Narx $</th><th></th></tr></thead>
+        <tbody id="priceRows"></tbody>
+      </table>
+    </div>
+    <div class="row" style="justify-content:space-between">
+      <button type="button" class="ghost" id="addPrice" style="flex:0 0 auto">+ Tovar qo'shish</button>
+      <span class="msg" id="priceMsg"></span>
+      <button type="button" class="primary" id="savePrices" style="flex:0 0 auto">Narxlarni saqlash</button>
+    </div>
+  </section>
+</div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
