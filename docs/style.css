@@ -94,3 +94,8 @@ td.r,th.r{text-align:right}
 .card ul{margin:4px 0 0;padding-left:18px;font-size:13px;background:var(--sunk);border-radius:8px;padding:8px 8px 8px 26px}
 .empty{padding:24px 12px;text-align:center;color:var(--muted)}
 .empty b{color:var(--ink);display:block;margin-bottom:4px}
+
+.firms{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
+.firms button{flex:0 0 auto;display:grid;gap:0;text-align:left;border-radius:12px;padding:8px 14px;background:var(--surface)}
+.firms button small{font-weight:500;font-size:12px;color:var(--muted)}
+.firms button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}

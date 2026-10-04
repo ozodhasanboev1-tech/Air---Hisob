@@ -13,8 +13,8 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>Air hisob-kitobi</h1>
-      <p class="sub">Бобур chiqargan yuklar va bizning to'lovlar, dollarda ($)</p>
+      <h1 id="title">Air hisob-kitobi</h1>
+      <p class="sub">Chiqarilgan yuklar va bizning to'lovlar, dollarda ($)</p>
     </div>
     <div class="status">
       <div class="store"><span class="dot" id="storeDot"></span><span id="storeTxt">Ulanmoqda…</span></div>
@@ -23,6 +23,8 @@
   </header>
 
   <div class="gate" id="gate" hidden></div>
+
+  <nav class="firms" id="firmTabs" aria-label="Firma" hidden></nav>
 
   <section class="balance" aria-label="Umumiy holat">
     <div class="main">
@@ -55,7 +57,7 @@
   </section>
 
   <form class="panel" id="shipForm" data-pane="ship" autocomplete="off" hidden>
-    <h2><span class="tag ship">YUK</span> Бобур ro'yxati</h2>
+    <h2><span class="tag ship">YUK</span> Yuk ro'yxati</h2>
     <div class="editing" id="shipEditing" hidden><span>Tahrirlanmoqda</span><button type="button" class="ghost" id="shipCancel">Bekor qilish</button></div>
     <div class="row">
       <label>Sana<input type="date" id="shipDate" required></label>
@@ -82,7 +84,7 @@
   </form>
 
   <form class="panel" id="payForm" data-pane="pay" autocomplete="off" hidden>
-    <h2><span class="tag cash">TO'LOV</span> Air'ga to'lov</h2>
+    <h2><span class="tag cash">TO'LOV</span> <span id="payTitle">Air'ga to'lov</span></h2>
     <div class="editing" id="payEditing" hidden><span>Tahrirlanmoqda</span><button type="button" class="ghost" id="payCancel">Bekor qilish</button></div>
     <div class="seg" role="group" aria-label="To'lov turi">
       <button type="button" id="mCash" aria-pressed="true">Naqd</button>
@@ -111,7 +113,7 @@
       </table>
     </div>
     <h2 style="margin-top:8px">1 karobka narxi ($)</h2>
-    <p class="example">Бобур yangi ro'yxat tashlaganda bot shu narxlarni qo'yadi. Eski yuklar o'zgarmaydi.</p>
+    <p class="example">Guruhga yangi ro'yxat tashlanganda bot shu narxlarni qo'yadi. Eski yuklar o'zgarmaydi.</p>
     <div class="tblwrap">
       <table class="items">
         <thead><tr><th>Tovar</th><th class="r">Narx $</th><th></th></tr></thead>

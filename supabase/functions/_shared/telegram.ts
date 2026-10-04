@@ -11,11 +11,12 @@ export async function tg(method: string, body: Record<string, unknown>): Promise
   return await res.json();
 }
 
-export function send(chatId: number, text: string, replyTo?: number) {
+export function send(chatId: number, text: string, replyTo?: number, extra: Record<string, unknown> = {}) {
   return tg("sendMessage", {
     chat_id: chatId,
     text,
     ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
+    ...extra,
   });
 }
 
