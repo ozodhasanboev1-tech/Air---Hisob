@@ -12,8 +12,11 @@ Telegram ichida @Air_Hisobi_bot orqali ochiladigan Mini App.
   faqat `OWNER_IDS` dagi foydalanuvchilarga ruxsat beradi.
 - **Mini App (`docs/`)** — GitHub Pages'da joylashgan sahifa: balans, harakatlar, yuk/to'lov qo'shish va
   tahrirlash, tovar narxlari.
-- **Ma'lumotlar** — Supabase Postgres: `entries` (yuk va to'lovlar) va `meta` (`prices`, `telegram`).
-  Jadval sxemasi: `supabase/migrations/001_init.sql`.
+- **Firmalar** — har bir yetkazib beruvchi (Air, Timson, ...) o'z Telegram guruhiga ega. Guruhda egasi
+  «/firma Nomi» deb yozsa, guruh shu firmaga bog'lanadi; yuk tashlovchining xabariga javoban «/yuk» yozilsa,
+  o'sha odamning ro'yxatlari yuk sifatida yoziladi. Botga yozilgan to'lovda bot firmani tugma bilan so'raydi.
+- **Ma'lumotlar** — Supabase Postgres: `firms` (nom, guruh, yuk tashlovchilar, narxlar), `entries`
+  (yuk va to'lovlar, `firm` ustuni bilan) va `meta` (`telegram`). Sxema: `supabase/migrations/`.
 
 ## O'zgartirish
 

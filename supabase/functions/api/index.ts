@@ -1,7 +1,7 @@
 // Backend for the Mini App. Every request carries Telegram's signed initData in the
 // X-Telegram-Init-Data header; only users listed in OWNER_IDS may read or change the ledger.
 
-import { deleteEntry, Entry, getMeta, listEntries, setMeta, upsertEntry } from "../_shared/db.ts";
+import { deleteEntry, Entry, getMeta, listEntries, listFirms, updateFirm, upsertEntry } from "../_shared/db.ts";
 import { verifyInitData } from "../_shared/telegram.ts";
 
 const OWNER_IDS = (Deno.env.get("OWNER_IDS") || "6158024788").split(",").map((s) => Number(s.trim()));
@@ -17,9 +17,11 @@ const json = (body: unknown, status = 200) =>
 const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : Number(v) || 0);
 const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
-function cleanEntry(e: any): Entry | null {
-  if (!e || !isDate(e.date)) return null;
+function cleanEntry(e: any, firmIds: string[]): Entry | null {
+  const firm = e?.firm || "air";
+  if (!e || !isDate(e.date) || !firmIds.includes(firm)) return null;
   const base = {
+    firm,
     id: typeof e.id === "string" && e.id ? e.id.slice(0, 80) : `app-${crypto.randomUUID()}`,
     date: e.date,
     note: String(e.note ?? "").slice(0, 500),
@@ -62,11 +64,11 @@ Deno.serve(async (req) => {
   try {
     switch (body.action) {
       case "load": {
-        const [entries, prices, telegram] = await Promise.all([listEntries(), getMeta("prices"), getMeta("telegram")]);
-        return json({ entries, prices: prices.items || {}, telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
+        const [entries, firms, telegram] = await Promise.all([listEntries(), listFirms(), getMeta("telegram")]);
+        return json({ entries, firms: firms.map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, linked: !!f.chat_id })), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
       }
       case "save": {
-        const e = cleanEntry(body.entry);
+        const e = cleanEntry(body.entry, (await listFirms()).map((f) => f.id));
         if (!e) return json({ error: "invalid", message: "Yozuv noto'g'ri to'ldirilgan." }, 400);
         const [row] = await upsertEntry(e);
         return json({ ok: true, id: row.id });
@@ -82,7 +84,10 @@ Deno.serve(async (req) => {
           const name = String(k).toLowerCase().replace(/\s+/g, " ").trim().slice(0, 100);
           if (name && num(v) > 0) items[name] = num(v);
         }
-        await setMeta("prices", { currency: "USD", items, updatedAt: new Date().toISOString() });
+        if (typeof body.firm !== "string" || !(await listFirms()).some((f) => f.id === body.firm)) {
+          return json({ error: "invalid", message: "Firma topilmadi." }, 400);
+        }
+        await updateFirm(body.firm, { prices: items });
         return json({ ok: true, items });
       }
       default:

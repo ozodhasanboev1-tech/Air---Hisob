@@ -22,6 +22,7 @@ export async function rest(path: string, init: RequestInit = {}): Promise<any> {
 
 export type Entry = {
   id: string;
+  firm: string;
   kind: "shipment" | "payment";
   date: string;
   note: string;
@@ -38,7 +39,7 @@ export type Entry = {
 
 export function rowToEntry(r: any): Entry {
   return {
-    id: r.id, kind: r.kind, date: r.date, note: r.note ?? "",
+    id: r.id, firm: r.firm, kind: r.kind, date: r.date, note: r.note ?? "",
     items: r.items ?? [], total: Number(r.total) || 0,
     method: r.method, amount: Number(r.amount) || 0,
     sumUzs: r.sum_uzs == null ? null : Number(r.sum_uzs),
@@ -50,7 +51,7 @@ export function rowToEntry(r: any): Entry {
 export function entryToRow(e: Entry): Record<string, unknown> {
   const isShip = e.kind === "shipment";
   return {
-    id: e.id, kind: e.kind, date: e.date, note: e.note ?? "",
+    id: e.id, firm: e.firm || "air", kind: e.kind, date: e.date, note: e.note ?? "",
     items: isShip ? e.items ?? [] : [],
     total: isShip ? e.total ?? 0 : 0,
     method: isShip ? null : e.method,
@@ -64,8 +65,9 @@ export function entryToRow(e: Entry): Record<string, unknown> {
   };
 }
 
-export async function listEntries(): Promise<Entry[]> {
-  const rows = await rest("entries?select=*&order=date.asc,created_at.asc");
+export async function listEntries(firm?: string): Promise<Entry[]> {
+  const f = firm ? `firm=eq.${encodeURIComponent(firm)}&` : "";
+  const rows = await rest(`entries?${f}select=*&order=date.asc,created_at.asc`);
   return rows.map(rowToEntry);
 }
 
@@ -119,4 +121,45 @@ export function summary(entries: Entry[]) {
     else naqd += e.amount || 0;
   }
   return { ship, naqd, perech, balance: ship - naqd - perech };
+}
+
+// ---------- firms ----------
+export type Firm = {
+  id: string;
+  name: string;
+  chat_id: number | null;
+  poster_ids: number[];
+  poster_name: string | null;
+  prices: Record<string, number>;
+  sort: number;
+};
+
+export async function listFirms(): Promise<Firm[]> {
+  return await rest("firms?select=*&order=sort.asc,created_at.asc");
+}
+
+export async function firmByChat(chatId: number): Promise<Firm | null> {
+  const rows = await rest(`firms?chat_id=eq.${chatId}&select=*`);
+  return rows[0] ?? null;
+}
+
+export async function updateFirm(id: string, patch: Partial<Firm>) {
+  const rows = await rest(`firms?id=eq.${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
+  return rows[0] as Firm;
+}
+
+export async function createFirm(f: Partial<Firm> & { id: string; name: string }) {
+  const rows = await rest("firms", { method: "POST", body: JSON.stringify(f) });
+  return rows[0] as Firm;
+}
+
+const CYR: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "j", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m",
+  н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "x", ц: "ts", ч: "ch", ш: "sh", щ: "sh",
+  ъ: "", ы: "i", ь: "", э: "e", ю: "yu", я: "ya", ў: "o", қ: "q", ғ: "g", ҳ: "h",
+};
+export function slugify(name: string): string {
+  const s = name.toLowerCase().split("").map((c) => CYR[c] ?? c).join("")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return s || `firma-${Date.now().toString(36)}`;
 }

@@ -13,7 +13,7 @@
   const fmtDate = (d) => { const [y, m, dd] = d.split('-'); return +dd + ' ' + MONTHS[+m - 1].slice(0, 3) + ' ' + y; };
   const norm = (s) => String(s).toLowerCase().replace(/\s+/g, ' ').trim();
 
-  let entries = [], priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
+  let allEntries = [], entries = [], firms = [], firm = 'air', priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
   const openDetail = new Set();
 
   // ---------- Telegram shell ----------
@@ -40,13 +40,15 @@
   async function load(quiet) {
     try {
       const d = await api('load');
-      entries = d.entries || []; priceList = d.prices || {};
+      allEntries = d.entries || []; firms = d.firms || [];
+      if (!firms.some((f) => f.id === firm)) firm = (firms.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;
+      selectFirm(firm, true);
       const t = d.telegram || {};
       setStore('ok', 'Ulangan · ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
       if (t.lastError) { $('tgDot').className = 'dot bad'; $('tgTxt').textContent = 'Bot: ' + t.lastError; }
       else { $('tgDot').className = 'dot ok'; $('tgTxt').textContent = t.lastShipmentAt ? 'Bot: oxirgi yuk ' + new Date(t.lastShipmentAt).toLocaleString('ru-RU', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Bot ishlayapti'; }
       $('gate').hidden = true;
-      render(); if (!quiet) drawPrices();
+      if (!quiet) drawPrices();
     } catch (err) {
       setStore('bad', 'Ulanib bo\'lmadi');
       if (err.status === 401 || err.status === 403) {
@@ -56,7 +58,34 @@
       }
     }
   }
-  async function saveEntry(id, data) { await api('save', { entry: Object.assign({ id }, data) }); await load(true); }
+  async function saveEntry(id, data) { await api('save', { entry: Object.assign({ id, firm }, data) }); await load(true); }
+
+  // ---------- firms ----------
+  function storedFirm() { try { return localStorage.getItem('firm'); } catch (e) { return null; } }
+  function selectFirm(id, keepForms) {
+    const changed = id !== firm;
+    firm = id;
+    try { localStorage.setItem('firm', id); } catch (e) {}
+    const f = firms.find((x) => x.id === id) || { name: 'Air', prices: {} };
+    entries = allEntries.filter((e) => (e.firm || 'air') === id);
+    priceList = f.prices || {};
+    document.title = f.name + ' hisob-kitobi';
+    $('title').textContent = f.name + ' hisob-kitobi';
+    $('payTitle').textContent = f.name + '\'ga to\'lov';
+    drawFirms();
+    if (changed && !keepForms) { resetShip(); resetPay(); drawPrices(); }
+    render();
+  }
+  function firmName() { return (firms.find((x) => x.id === firm) || { name: 'Air' }).name; }
+  function drawFirms() {
+    const box = $('firmTabs');
+    box.hidden = firms.length < 2;
+    box.innerHTML = firms.map((f) => {
+      let bal = 0; allEntries.forEach((e) => { if ((e.firm || 'air') === f.id) bal += e.kind === 'shipment' ? (e.total || 0) : -(e.amount || 0); });
+      return `<button type="button" data-firm="${esc(f.id)}" aria-pressed="${f.id === firm}">${esc(f.name)}<small class="num">${fmt(bal)} $</small></button>`;
+    }).join('');
+  }
+  $('firmTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) selectFirm(b.dataset.firm); });
   async function removeEntry(id) { await api('delete', { id }); await load(true); }
 
   // ---------- tabs ----------
@@ -91,7 +120,7 @@
   $('addPrice').onclick = () => { priceDraft.push({ name: '', price: 0 }); paintPrices(); };
   $('savePrices').onclick = async () => {
     const out = {}; priceDraft.forEach((p) => { if (norm(p.name) && p.price > 0) out[norm(p.name)] = p.price; });
-    try { const r = await api('prices', { items: out }); priceList = r.items; drawPrices(); msg('priceMsg', 'Saqlandi'); haptic('success'); }
+    try { const r = await api('prices', { firm, items: out }); priceList = r.items; const f = firms.find((x) => x.id === firm); if (f) f.prices = r.items; drawPrices(); msg('priceMsg', 'Saqlandi'); haptic('success'); }
     catch (err) { msg('priceMsg', err.message, true); haptic('error'); }
   };
 
@@ -209,8 +238,8 @@
     $('totShip').textContent = fmt(ship); $('totCash').textContent = fmt(cash); $('totBank').textContent = fmt(bank);
     $('cntShip').textContent = nS + ' ta ro\'yxat'; $('cntCash').textContent = nC + ' marta'; $('cntBank').textContent = nB + ' marta';
     const v = $('balVal');
-    if (bal > 0.004) { $('balLabel').textContent = 'Air\'ga qarzimiz'; v.className = 'v num debt'; v.textContent = fmt(bal) + ' $'; $('balHint').textContent = 'Yuklar ' + fmt(ship) + ' − to\'lovlar ' + fmt(cash + bank); }
-    else if (bal < -0.004) { $('balLabel').textContent = 'Ortiqcha to\'langan'; v.className = 'v num over'; v.textContent = fmt(-bal) + ' $'; $('balHint').textContent = 'Air keyingi yuklarda hisobga oladi'; }
+    if (bal > 0.004) { $('balLabel').textContent = firmName() + '\'ga qarzimiz'; v.className = 'v num debt'; v.textContent = fmt(bal) + ' $'; $('balHint').textContent = 'Yuklar ' + fmt(ship) + ' − to\'lovlar ' + fmt(cash + bank); }
+    else if (bal < -0.004) { $('balLabel').textContent = 'Ortiqcha to\'langan'; v.className = 'v num over'; v.textContent = fmt(-bal) + ' $'; $('balHint').textContent = firmName() + ' keyingi yuklarda hisobga oladi'; }
     else { $('balLabel').textContent = 'Qarz yo\'q'; v.className = 'v num'; v.textContent = '0 $'; $('balHint').textContent = entries.length ? 'Hisob teng' : 'Birinchi yuk yoki to\'lovni qo\'shing'; }
     const base = Math.max(ship, cash + bank, 1);
     $('barCash').style.width = (cash / base * 100) + '%'; $('barBank').style.width = (bank / base * 100) + '%';
@@ -226,7 +255,7 @@
 
     const box = $('ledgerRows');
     if (!shown.length) {
-      box.innerHTML = '<div class="empty"><b>Hali yozuv yo\'q</b>Бобур guruhga ro\'yxat tashlasa, bot o\'zi qo\'shadi. To\'lovni botga «naqd 500$» deb yozing yoki «+ To\'lov»dan kiriting.</div>';
+      box.innerHTML = '<div class="empty"><b>Hali yozuv yo\'q</b>Guruhga yuk ro\'yxati tashlansa, bot o\'zi qo\'shadi. To\'lovni botga «naqd 500$» deb yozing yoki «+ To\'lov»dan kiriting.</div>';
     } else {
       box.innerHTML = shown.map((e) => {
         const isS = e.kind === 'shipment';
