@@ -8,7 +8,7 @@
 
 import {
   createFirm, deleteEntry, Entry, Firm, firmByChat, fmt, getMeta, listEntries, listFirms, rest, rowToEntry,
-  setMeta, shipmentTotals, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
+  setMeta, shipmentTotals, storePhoto, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
 } from "../_shared/db.ts";
 import { downloadFile, send, tg } from "../_shared/telegram.ts";
 import { bytesToBase64, hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
@@ -357,6 +357,7 @@ async function shipment(msg: any, text: string, firm: Firm): Promise<boolean> {
       createdAt: msg.date * 1000 + i,
       source: "telegram",
       sender: [from.first_name, from.last_name].filter(Boolean).join(" "),
+      original: { text, from: [from.first_name, from.last_name].filter(Boolean).join(" "), at: msg.date * 1000 },
     });
   }
   const t = await getMeta("telegram");
@@ -398,16 +399,31 @@ async function photoShipment(msg: any, firm: Firm) {
 async function readPhoto(msg: any, firm: Firm) {
   const sizes = msg.photo;
   const { bytes, mediaType } = await downloadFile(sizes[sizes.length - 1].file_id);
+  const sender = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ");
+  // Keep the photo itself, exactly as posted, next to the shipments read from it.
+  const ext = mediaType.includes("png") ? "png" : "jpg";
+  const photo = await storePhoto(`${firm.id}/${docId(msg.chat.id, msg.message_id)}.${ext}`, bytes, mediaType)
+    .catch((err) => (console.error("storePhoto", err), undefined));
+  const original = { photo, text: (msg.caption || "").trim() || undefined, from: sender, at: msg.date * 1000 };
   const prices = await priceMap(firm);
+  const base = docId(msg.chat.id, msg.message_id);
+  // An unread photo still gets an empty shipment, so the photo is kept and can be filled in the app.
+  const unread = async (why: string) => {
+    await upsertEntry({
+      id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(msg.date), note: "📷 o'qilmagan rasm",
+      items: [], total: 0, gross: 0, discountPct: Number(firm.discount_pct) || 0,
+      createdAt: msg.date * 1000, source: "telegram", sender, original,
+    });
+    await notifyOwners(`📷 «${firm.name}»: ${why}. Rasm ilovada saqlandi, ro'yxatni o'sha yerda kiriting.`);
+  };
   let lists;
   try {
     lists = await readListPhoto(bytesToBase64(bytes), mediaType, Object.keys(firm.prices || {}));
   } catch (err) {
     console.error(err);
-    return void await notifyOwners(`📷 «${firm.name}»: rasmni o'qib bo'lmadi (${String(err).slice(0, 120)}). Ilovada qo'lda kiriting.`);
+    return void await unread(`rasmni o'qib bo'lmadi (${String(err).slice(0, 120)})`);
   }
-  if (!lists.length) return void await notifyOwners(`📷 «${firm.name}»: rasmda ro'yxat topilmadi.`);
-  const base = docId(msg.chat.id, msg.message_id);
+  if (!lists.length) return void await unread("rasmda ro'yxat topilmadi");
   const lines: string[] = [];
   let sum = 0;
   for (const [i, l] of lists.entries()) {
@@ -426,12 +442,13 @@ async function readPhoto(msg: any, firm: Firm) {
       discountPct: Number(firm.discount_pct) || 0,
       createdAt: msg.date * 1000 + i,
       source: "telegram",
-      sender: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" "),
+      sender,
+      original,
     });
     sum += total;
     const noPrice = items.filter((it) => !it.price).length;
     const qty = items.reduce((s, it) => s + it.qty, 0);
-    lines.push(`• ${l.counterparty || "?"} (${ddmm(date)}): ${items.length} xil, ${fmt(qty)} dona/k → ${fmt(total)} $${noPrice ? ` (${noPrice} tasi narxsiz)` : ""}`);
+    lines.push(`• ${l.counterparty || "?"} (${ddmm(date)}): ${items.length} xil, ${fmt(qty)} k → ${fmt(total)} $${noPrice ? ` (${noPrice} tasi narxsiz)` : ""}`);
   }
   const t = await getMeta("telegram");
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });

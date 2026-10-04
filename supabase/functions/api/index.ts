@@ -2,7 +2,7 @@
 // X-Telegram-Init-Data header; only users listed in OWNER_IDS may read or change the ledger.
 
 import {
-  deleteEntry, Entry, Firm, getMeta, listEntries, listFirms, shipmentTotals, updateFirm, upsertEntry,
+  deleteEntry, Entry, Firm, getMeta, listEntries, listFirms, photoUrl, rest, rowToEntry, shipmentTotals, updateFirm, upsertEntry,
 } from "../_shared/db.ts";
 import { verifyInitData } from "../_shared/telegram.ts";
 import { hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
@@ -113,6 +113,14 @@ Deno.serve(async (req) => {
         if (pct < 0 || pct >= 100) return json({ error: "invalid", message: "Chegirma 0 dan 99 gacha bo'lsin." }, 400);
         await updateFirm(f.id, { discount_pct: pct });
         return json({ ok: true, discountPct: pct });
+      }
+      case "original": {
+        // The Telegram post a shipment came from: its text and/or a short-lived link to the photo.
+        if (typeof body.id !== "string" || !body.id) return json({ error: "invalid" }, 400);
+        const [row] = await rest(`entries?id=eq.${encodeURIComponent(body.id)}&select=*`);
+        const o = row && rowToEntry(row).original;
+        if (!o) return json({ error: "none", message: "Bu yukning asl nusxasi saqlanmagan." }, 404);
+        return json({ ok: true, text: o.text || "", from: o.from || "", at: o.at || null, photo: o.photo ? await photoUrl(o.photo) : null });
       }
       case "ocr": {
         if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun GEMINI_API_KEY (bepul) qo'yilmagan." }, 400);

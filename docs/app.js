@@ -17,6 +17,17 @@
 
   let allEntries = [], entries = [], firms = [], firm = 'air', priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
   const openDetail = new Set();
+  // The original Telegram post (photo or text) behind a shipment, loaded on demand.
+  const origShown = new Set(), origData = {};
+  function origHtml(id) {
+    const o = origData[id];
+    if (!o || o.loading) return '<div class="orig"><span class="example">Yuklanmoqda…</span></div>';
+    if (o.error) return `<div class="orig"><span class="msg err">${esc(o.error)}</span></div>`;
+    const when = o.at ? new Date(o.at).toLocaleString('uz', { timeZone: 'Asia/Tashkent', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    return `<div class="orig"><span class="example">${esc([o.from, when].filter(Boolean).join(' · '))}</span>`
+      + (o.photo ? `<a href="${esc(o.photo)}" target="_blank" rel="noopener"><img src="${esc(o.photo)}" alt="Asl rasm"></a>` : '')
+      + (o.text ? `<pre>${esc(o.text)}</pre>` : '') + '</div>';
+  }
 
   // ---------- Telegram shell ----------
   if (TG) {
@@ -338,8 +349,9 @@
         return `<div class="card">
           <div class="top"><span class="when num">${tag}${fmtDate(e.date)}</span><span class="amt num ${isS ? 'plus' : 'minus'}">${isS ? '+' : '−'}${fmt(amountOf(e))} $</span></div>
           <div class="desc">${desc}</div>
+          ${origShown.has(e.id) ? origHtml(e.id) : ''}
           ${isS && open ? `<ul>${its.map((i) => `<li>${esc(i.name)} — <span class="num">${fmt(i.qty)} × ${i.price ? fmt(i.price) : '?'} = ${fmt(i.qty * i.price)} $</span></li>`).join('')}</ul>` : ''}
-          <div class="top"><span class="bal num">Qoldiq: ${fmt(balAfter[e.id])} $</span><span class="acts">${isS ? `<button class="ghost" data-act="open" data-id="${esc(e.id)}" aria-expanded="${open}">${open ? 'Yopish' : 'Ro\'yxat'}</button>` : ''}<button class="ghost" data-act="edit" data-id="${esc(e.id)}">Tahrirlash</button><button class="ghost danger" data-act="del" data-id="${esc(e.id)}">O'chirish</button></span></div>
+          <div class="top"><span class="bal num">Qoldiq: ${fmt(balAfter[e.id])} $</span><span class="acts">${e.original ? `<button class="ghost" data-act="orig" data-id="${esc(e.id)}" aria-expanded="${origShown.has(e.id)}">${origShown.has(e.id) ? 'Aslini yopish' : (e.original.photo ? '📷 Asli' : '💬 Asli')}</button>` : ''}${isS ? `<button class="ghost" data-act="open" data-id="${esc(e.id)}" aria-expanded="${open}">${open ? 'Yopish' : 'Ro\'yxat'}</button>` : ''}<button class="ghost" data-act="edit" data-id="${esc(e.id)}">Tahrirlash</button><button class="ghost danger" data-act="del" data-id="${esc(e.id)}">O'chirish</button></span></div>
         </div>`;
       }).join('');
     }
@@ -360,6 +372,15 @@
     const b = ev.target.closest('button'); if (!b) return;
     const id = b.dataset.id, e = entries.find((x) => x.id === id); if (!e) return;
     if (b.dataset.act === 'open') { openDetail.has(id) ? openDetail.delete(id) : openDetail.add(id); render(); }
+    else if (b.dataset.act === 'orig') {
+      if (origShown.has(id)) { origShown.delete(id); render(); return; }
+      origShown.add(id); render();
+      if (!origData[id] || origData[id].error) {
+        origData[id] = { loading: true }; render();
+        try { origData[id] = await api('original', { id }); } catch (err) { origData[id] = { error: err.message || 'Yuklanmadi' }; }
+        render();
+      }
+    }
     else if (b.dataset.act === 'edit') {
       if (e.kind === 'shipment') {
         shipEditId = id; shipDiscount = e.discountPct || 0; items = (e.items || []).map((i) => Object.assign({}, i)); $('shipDate').value = e.date; $('shipNote').value = e.note || ''; $('shipPaste').value = '';

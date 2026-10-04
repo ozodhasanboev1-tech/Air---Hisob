@@ -37,6 +37,7 @@ export type Entry = {
   createdAt: number;
   source?: string;
   sender?: string | null;
+  original?: { text?: string; photo?: string; from?: string; at?: number } | null;
 };
 
 export function rowToEntry(r: any): Entry {
@@ -49,6 +50,7 @@ export function rowToEntry(r: any): Entry {
     sumUzs: r.sum_uzs == null ? null : Number(r.sum_uzs),
     rate: r.rate == null ? null : Number(r.rate),
     createdAt: Number(r.created_at), source: r.source, sender: r.sender,
+    original: r.original ?? null,
   };
 }
 
@@ -68,7 +70,31 @@ export function entryToRow(e: Entry): Record<string, unknown> {
     sender: e.sender ?? null,
     created_at: e.createdAt ?? Date.now(),
     updated_at: new Date().toISOString(),
+    // Left out unless set, so edits from the app keep the stored original.
+    ...(e.original !== undefined ? { original: e.original } : {}),
   };
+}
+
+// ---------- storage: original photos ----------
+export async function storePhoto(path: string, bytes: Uint8Array, mediaType: string) {
+  const res = await fetch(`${SB_URL}/storage/v1/object/originals/${path}`, {
+    method: "POST",
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": mediaType, "x-upsert": "true" },
+    body: bytes,
+  });
+  if (!res.ok) throw new Error(`storage ${res.status}: ${await res.text()}`);
+  return path;
+}
+
+export async function photoUrl(path: string, expiresIn = 3600): Promise<string> {
+  const res = await fetch(`${SB_URL}/storage/v1/object/sign/originals/${path}`, {
+    method: "POST",
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(`storage ${res.status}: ${JSON.stringify(data)}`);
+  return `${SB_URL}/storage/v1${data.signedURL}`;
 }
 
 export async function listEntries(firm?: string): Promise<Entry[]> {
