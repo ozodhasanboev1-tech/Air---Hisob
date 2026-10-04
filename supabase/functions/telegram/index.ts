@@ -72,7 +72,13 @@ async function handle(update: any) {
     return;
   }
   const firm = isGroup ? await firmByChat(chat.id) : null;
-  if (isGroup && firm && msg.photo && !update.edited_message) return void await photoShipment(msg, firm);
+  if (isGroup && firm && msg.photo && !update.edited_message) {
+    // Remember the group's latest photo so a bare «/yuk» can point at it.
+    if (msg.from && !msg.from.is_bot) {
+      await setMeta(`lastPhoto:${chat.id}`, { message_id: msg.message_id, date: msg.date, chat: { id: chat.id }, from: msg.from, photo: msg.photo });
+    }
+    return void await photoShipment(msg, firm);
+  }
   if (!text) return;
 
   if (OWNER_IDS.includes(from.id)) {
@@ -118,7 +124,22 @@ async function linkGroup(msg: any, name: string) {
 async function markPoster(msg: any, firm: Firm | null) {
   const chatId = msg.chat.id;
   if (!firm) return void await send(chatId, "Avval guruhni firmaga bog'lang: «/firma Nomi».", msg.message_id);
-  const r = msg.reply_to_message;
+  let r = msg.reply_to_message;
+  // A quote-reply can arrive as external_reply (the original's author in origin.sender_user).
+  if ((!r?.from || r.from.is_bot) && msg.external_reply?.origin?.sender_user) {
+    const x = msg.external_reply;
+    r = { ...x, from: x.origin.sender_user, chat: x.chat || msg.chat, message_id: x.message_id ?? msg.message_id, date: x.origin.date ?? msg.date };
+  }
+  // No usable reply at all: use the last photo posted in this group.
+  if (!r?.from || r.from.is_bot) {
+    const last = await getMeta(`lastPhoto:${chatId}`).catch(() => null);
+    await setMeta("debug_yuk", {
+      at: new Date().toISOString(), keys: Object.keys(msg), reply: msg.reply_to_message ? Object.keys(msg.reply_to_message) : null,
+      replyFromBot: msg.reply_to_message?.from?.is_bot ?? null, replyFromId: msg.reply_to_message?.from?.id ?? null,
+      external: msg.external_reply ? Object.keys(msg.external_reply) : null, hadLast: !!last?.from,
+    }).catch(() => {});
+    if (last?.from) r = last;
+  }
   if (!r?.from || r.from.is_bot) return void await send(chatId, "«/yuk» ni yuk tashlovchining xabariga javob qilib yozing.", msg.message_id);
   const ids = [...new Set([...(firm.poster_ids || []), r.from.id])];
   firm = await updateFirm(firm.id, { poster_ids: ids });
