@@ -368,7 +368,7 @@ async function notifyOwners(text: string) {
 async function photoShipment(msg: any, firm: Firm) {
   if (!(await isPoster(msg.from || {}, firm))) return;
   if (!hasOcrKey()) {
-    return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun Claude API kaliti hali qo'yilmagan.`);
+    return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun GEMINI_API_KEY (bepul) hali qo'yilmagan.`);
   }
   // Reading a photo takes a while; answer Telegram now and finish in the background.
   await background(readPhoto(msg, firm));

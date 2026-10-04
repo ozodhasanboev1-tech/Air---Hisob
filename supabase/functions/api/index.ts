@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
         return json({ ok: true, discountPct: pct });
       }
       case "ocr": {
-        if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun Claude API kaliti qo'yilmagan." }, 400);
+        if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun GEMINI_API_KEY (bepul) qo'yilmagan." }, 400);
         const f = (await listFirms()).find((x) => x.id === body.firm);
         if (!f || typeof body.image !== "string" || body.image.length > 7_000_000) {
           return json({ error: "invalid", message: "Rasm juda katta yoki firma topilmadi." }, 400);

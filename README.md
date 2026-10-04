@@ -15,8 +15,9 @@ Telegram ichida @Air_Hisobi_bot orqali ochiladigan Mini App.
 - **Firmalar** — har bir yetkazib beruvchi (Air, Timson, ...) o'z Telegram guruhiga ega. Guruhda egasi
   «/firma Nomi» deb yozsa, guruh shu firmaga bog'lanadi; yuk tashlovchining xabariga javoban «/yuk» yozilsa,
   o'sha odamning ro'yxatlari yuk sifatida yoziladi. Botga yozilgan to'lovda bot firmani tugma bilan so'raydi.
-- **Rasmdan o'qish** — yuk tashlovchi qo'lda yozilgan ro'yxat rasmini tashlasa (Doctor), bot uni Claude bilan
-  o'qiydi (`supabase/functions/_shared/ocr.ts`, `ANTHROPIC_API_KEY` secret kerak) va har bir mijoz ro'yxatini
+- **Rasmdan o'qish** — yuk tashlovchi qo'lda yozilgan ro'yxat rasmini tashlasa (Doctor), bot uni Google Gemini bilan
+  o'qiydi (`supabase/functions/_shared/ocr.ts`, bepul `GEMINI_API_KEY` secret kerak: aistudio.google.com/apikey,
+  karta talab qilinmaydi; `ANTHROPIC_API_KEY` qo'yilsa Claude ishlatiladi) va har bir mijoz ro'yxatini
   alohida yuk qilib yozadi. Ilovada ham «📷 Rasmdan o'qish» tugmasi bor.
 - **Chegirma** — har bir firmaga foiz (Doctor 13%); yuk summasidan ayirib yoziladi, ilovada «Tovarlar»da o'zgartiriladi.
 - **Ma'lumotlar** — Supabase Postgres: `firms` (nom, guruh, yuk tashlovchilar, narxlar), `entries`
