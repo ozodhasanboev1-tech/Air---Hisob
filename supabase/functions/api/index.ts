@@ -1,8 +1,12 @@
 // Backend for the Mini App. Every request carries Telegram's signed initData in the
 // X-Telegram-Init-Data header; only users listed in OWNER_IDS may read or change the ledger.
 
-import { deleteEntry, Entry, getMeta, listEntries, listFirms, updateFirm, upsertEntry } from "../_shared/db.ts";
+import {
+  deleteEntry, Entry, Firm, getMeta, listEntries, listFirms, shipmentTotals, updateFirm, upsertEntry,
+} from "../_shared/db.ts";
 import { verifyInitData } from "../_shared/telegram.ts";
+import { hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
+import { norm } from "../_shared/parse.ts";
 
 const OWNER_IDS = (Deno.env.get("OWNER_IDS") || "6158024788").split(",").map((s) => Number(s.trim()));
 
@@ -17,9 +21,10 @@ const json = (body: unknown, status = 200) =>
 const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : Number(v) || 0);
 const isDate = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
-function cleanEntry(e: any, firmIds: string[]): Entry | null {
+function cleanEntry(e: any, firms: Firm[]): Entry | null {
   const firm = e?.firm || "air";
-  if (!e || !isDate(e.date) || !firmIds.includes(firm)) return null;
+  const f = firms.find((x) => x.id === firm);
+  if (!e || !isDate(e.date) || !f) return null;
   const base = {
     firm,
     id: typeof e.id === "string" && e.id ? e.id.slice(0, 80) : `app-${crypto.randomUUID()}`,
@@ -33,8 +38,9 @@ function cleanEntry(e: any, firmIds: string[]): Entry | null {
       .map((i: any) => ({ name: String(i?.name ?? "").trim().slice(0, 100), qty: num(i?.qty), price: num(i?.price) }))
       .filter((i: any) => i.name && i.qty > 0);
     if (!items.length) return null;
-    const total = Math.round(items.reduce((s: number, i: any) => s + i.qty * i.price, 0) * 100) / 100;
-    return { ...base, kind: "shipment", items, total, sender: e.sender ?? null };
+    const pct = e.discountPct == null ? Number(f.discount_pct) || 0 : Math.min(100, Math.max(0, num(e.discountPct)));
+    const { gross, total } = shipmentTotals(items, pct);
+    return { ...base, kind: "shipment", items, total, gross, discountPct: pct, sender: e.sender ?? null };
   }
   if (e.kind === "payment") {
     const amount = num(e.amount);
@@ -65,10 +71,10 @@ Deno.serve(async (req) => {
     switch (body.action) {
       case "load": {
         const [entries, firms, telegram] = await Promise.all([listEntries(), listFirms(), getMeta("telegram")]);
-        return json({ entries, firms: firms.map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, linked: !!f.chat_id })), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
+        return json({ entries, firms: firms.map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
       }
       case "save": {
-        const e = cleanEntry(body.entry, (await listFirms()).map((f) => f.id));
+        const e = cleanEntry(body.entry, await listFirms());
         if (!e) return json({ error: "invalid", message: "Yozuv noto'g'ri to'ldirilgan." }, 400);
         const [row] = await upsertEntry(e);
         return json({ ok: true, id: row.id });
@@ -88,7 +94,35 @@ Deno.serve(async (req) => {
           return json({ error: "invalid", message: "Firma topilmadi." }, 400);
         }
         await updateFirm(body.firm, { prices: items });
-        return json({ ok: true, items });
+        // Fill in shipments that were recorded before the product had a price.
+        const map: Record<string, number> = {};
+        for (const [k, v] of Object.entries(items)) map[norm(k)] = v;
+        let filled = 0;
+        for (const e of await listEntries(body.firm)) {
+          if (e.kind !== "shipment" || !(e.items || []).some((i) => !i.price && map[norm(i.name)])) continue;
+          const its = e.items!.map((i) => (i.price ? i : { ...i, price: map[norm(i.name)] || 0 }));
+          await upsertEntry({ ...e, items: its, ...shipmentTotals(its, e.discountPct || 0) });
+          filled++;
+        }
+        return json({ ok: true, items, filled });
+      }
+      case "firm": {
+        const f = (await listFirms()).find((x) => x.id === body.firm);
+        if (!f) return json({ error: "invalid", message: "Firma topilmadi." }, 400);
+        const pct = num(body.discountPct);
+        if (pct < 0 || pct >= 100) return json({ error: "invalid", message: "Chegirma 0 dan 99 gacha bo'lsin." }, 400);
+        await updateFirm(f.id, { discount_pct: pct });
+        return json({ ok: true, discountPct: pct });
+      }
+      case "ocr": {
+        if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun Claude API kaliti qo'yilmagan." }, 400);
+        const f = (await listFirms()).find((x) => x.id === body.firm);
+        if (!f || typeof body.image !== "string" || body.image.length > 7_000_000) {
+          return json({ error: "invalid", message: "Rasm juda katta yoki firma topilmadi." }, 400);
+        }
+        const media = ["image/jpeg", "image/png", "image/webp"].includes(body.mediaType) ? body.mediaType : "image/jpeg";
+        const lists = await readListPhoto(body.image, media, Object.keys(f.prices || {}));
+        return json({ ok: true, lists });
       }
       default:
         return json({ error: "action" }, 400);

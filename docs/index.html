@@ -70,6 +70,10 @@
       <span class="example">Birinchi qator manzil, keyin <code>tovar – karobka soni</code>. Narx «Tovarlar» bo'limidan olinadi.</span>
       <button type="button" id="parseBtn" style="flex:0 0 auto">Ro'yxatni ajratish</button>
     </div>
+    <div class="row" id="photoRow" hidden>
+      <span class="example">Qo'lda yozilgan ro'yxat rasmi bo'lsa, rasmni tanlang: bot o'qib, jadvalni to'ldiradi.</span>
+      <label class="filebtn" style="flex:0 0 auto">📷 Rasmdan o'qish<input type="file" id="photoInput" accept="image/*" hidden></label>
+    </div>
     <div class="tblwrap">
       <table class="items">
         <thead><tr><th>Tovar</th><th class="r">Karobka</th><th class="r">Narx $</th><th class="r">Summa</th><th></th></tr></thead>
@@ -78,7 +82,7 @@
     </div>
     <div class="total">
       <button type="button" class="ghost" id="addRow">+ Qator qo'shish</button>
-      <span>Jami: <strong class="num" id="shipTotal">0</strong> $</span>
+      <span>Jami: <strong class="num" id="shipTotal">0</strong> $<span class="example" id="shipDisc"></span></span>
     </div>
     <div class="row" style="justify-content:flex-end"><span class="msg" id="shipMsg"></span><button type="submit" class="primary" style="flex:0 0 auto">Yukni saqlash</button></div>
   </form>
@@ -113,7 +117,7 @@
       </table>
     </div>
     <h2 style="margin-top:8px">1 karobka narxi ($)</h2>
-    <p class="example">Guruhga yangi ro'yxat tashlanganda bot shu narxlarni qo'yadi. Eski yuklar o'zgarmaydi.</p>
+    <p class="example">Guruhga yangi ro'yxat tashlanganda bot shu narxlarni qo'yadi. Narxi yo'q bo'lgan eski yuklarga ham saqlaganda qo'yiladi; narxi bor eski yuklar o'zgarmaydi.</p>
     <div class="tblwrap">
       <table class="items">
         <thead><tr><th>Tovar</th><th class="r">Narx $</th><th></th></tr></thead>
@@ -124,6 +128,13 @@
       <button type="button" class="ghost" id="addPrice" style="flex:0 0 auto">+ Tovar qo'shish</button>
       <span class="msg" id="priceMsg"></span>
       <button type="button" class="primary" id="savePrices" style="flex:0 0 auto">Narxlarni saqlash</button>
+    </div>
+    <h2 style="margin-top:8px">Chegirma</h2>
+    <p class="example">Har bir yuk summasidan shu foiz ayirib yoziladi (masalan Doctor uchun 13%). O'zgartirsangiz, faqat yangi yuklarga ta'sir qiladi.</p>
+    <div class="row">
+      <label style="flex:0 1 160px">Chegirma, %<input type="text" inputmode="decimal" id="discInput" placeholder="0"></label>
+      <span class="msg" id="discMsg"></span>
+      <button type="button" class="primary" id="saveDisc" style="flex:0 0 auto">Saqlash</button>
     </div>
   </section>
 </div>

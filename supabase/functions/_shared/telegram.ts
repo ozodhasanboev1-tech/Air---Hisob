@@ -20,6 +20,18 @@ export function send(chatId: number, text: string, replyTo?: number, extra: Reco
   });
 }
 
+// Downloads a file the bot received (photo etc.) and returns its bytes and a guessed media type.
+export async function downloadFile(fileId: string): Promise<{ bytes: Uint8Array; mediaType: string }> {
+  const info = await tg("getFile", { file_id: fileId });
+  const path: string = info?.result?.file_path;
+  if (!path) throw new Error("getFile failed");
+  const res = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${path}`);
+  if (!res.ok) throw new Error(`download ${res.status}`);
+  const ext = path.split(".").pop()?.toLowerCase();
+  const mediaType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  return { bytes: new Uint8Array(await res.arrayBuffer()), mediaType };
+}
+
 async function hmac(key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayBuffer> {
   const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(data));

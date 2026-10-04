@@ -11,7 +11,9 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];
   const fmtDate = (d) => { const [y, m, dd] = d.split('-'); return +dd + ' ' + MONTHS[+m - 1].slice(0, 3) + ' ' + y; };
-  const norm = (s) => String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+  // Same as the bot's norm(): Cyrillic look-alikes folded to Latin so "750х" matches "750x".
+  const LOOKALIKE = { а: 'a', б: 'b', в: 'b', е: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't', у: 'y', х: 'x' };
+  const norm = (s) => String(s).toLowerCase().replace(/[абвекмнорстух]/g, (c) => LOOKALIKE[c]).replace(/\s+/g, ' ').trim();
 
   let allEntries = [], entries = [], firms = [], firm = 'air', priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
   const openDetail = new Set();
@@ -41,6 +43,7 @@
     try {
       const d = await api('load');
       allEntries = d.entries || []; firms = d.firms || [];
+      $('photoRow').hidden = !d.ocr;
       if (!firms.some((f) => f.id === firm)) firm = (firms.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;
       selectFirm(firm, true);
       const t = d.telegram || {};
@@ -105,6 +108,7 @@
   }
   let priceDraft = [];
   function drawPrices() {
+    $('discInput').value = firmDiscount() || '';
     priceDraft = Object.keys(priceList).sort().map((k) => ({ name: k, price: priceList[k] }));
     paintPrices();
   }
@@ -120,9 +124,56 @@
   $('addPrice').onclick = () => { priceDraft.push({ name: '', price: 0 }); paintPrices(); };
   $('savePrices').onclick = async () => {
     const out = {}; priceDraft.forEach((p) => { if (norm(p.name) && p.price > 0) out[norm(p.name)] = p.price; });
-    try { const r = await api('prices', { firm, items: out }); priceList = r.items; const f = firms.find((x) => x.id === firm); if (f) f.prices = r.items; drawPrices(); msg('priceMsg', 'Saqlandi'); haptic('success'); }
+    try { const r = await api('prices', { firm, items: out }); priceList = r.items; const f = firms.find((x) => x.id === firm); if (f) f.prices = r.items; drawPrices(); msg('priceMsg', 'Saqlandi' + (r.filled ? ', ' + r.filled + ' ta eski yukka narx qo\'yildi' : '')); haptic('success'); if (r.filled) load(true); }
     catch (err) { msg('priceMsg', err.message, true); haptic('error'); }
   };
+
+  // ---------- discount ----------
+  $('saveDisc').onclick = async () => {
+    const pct = parseNum($('discInput').value);
+    try {
+      const r = await api('firm', { firm, discountPct: pct });
+      const f = firms.find((x) => x.id === firm); if (f) f.discountPct = r.discountPct;
+      if (!shipEditId) { shipDiscount = r.discountPct; updShipTotal(); }
+      msg('discMsg', 'Saqlandi: ' + fmt(r.discountPct) + '%'); haptic('success');
+    } catch (err) { msg('discMsg', err.message, true); haptic('error'); }
+  };
+
+  // ---------- photo of a handwritten list ----------
+  let photoQueue = [];
+  function loadPhotoList(l) {
+    const prices = lastPrices();
+    resetShip();
+    items = l.items.map((i) => ({ name: i.name, qty: i.qty, price: prices[norm(i.name)] || 0 }));
+    if (l.date) $('shipDate').value = l.date;
+    $('shipNote').value = l.counterparty || '';
+    drawItems();
+  }
+  function shrink(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 2000 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+      };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  $('photoInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    msg('shipMsg', 'Rasm o\'qilyapti, biroz kuting…');
+    try {
+      const r = await api('ocr', { firm, image: await shrink(file), mediaType: 'image/jpeg' });
+      if (!r.lists.length) { msg('shipMsg', 'Rasmda ro\'yxat topilmadi.', true); return; }
+      photoQueue = r.lists.slice(1);
+      loadPhotoList(r.lists[0]);
+      msg('shipMsg', r.lists.length + ' ta ro\'yxat topildi. Tekshirib «Yukni saqlash»ni bosing' + (photoQueue.length ? ', keyingisi o\'zi ochiladi.' : '.'));
+    } catch (err) { msg('shipMsg', err.message, true); haptic('error'); }
+  });
 
   // ---------- parsing Бобур's list ----------
   const UNIT = '(?:ta|dona|шт\\.?|штук[аи]?|та|дона|кор\\.?|коробка|karobka|blok|блок|pcs|k|к|x?)';
@@ -132,6 +183,13 @@
     text.split(/\r?\n/).forEach((raw) => {
       const line = raw.replace(/^[\s\-–—•*·▪️✅➖🔹🔸]+/u, '').replace(/^\d{1,3}[.)]\s+/, '').trim();
       if (!line) return;
+      const d = line.match(/(\d{1,2})[./](\d{1,2})[./](\d{2,4})/);
+      if (d) { // "Мухиддин 3.10.26": counterparty and date header
+        let y = +d[3]; if (y < 100) y += 2000;
+        out.date = y + '-' + d[2].padStart(2, '0') + '-' + d[1].padStart(2, '0');
+        const n = line.replace(d[0], ' ').replace(/\s+/g, ' ').trim(); if (n) dest.push(n);
+        return;
+      }
       let name = line, qty = 0, price = 0, m;
       m = line.match(new RegExp('^(.*?)[\\s:=\\-–—]+(\\d[\\d\\s.,]*)\\s*' + UNIT + '\\s*[x×*хХ]\\s*(\\d[\\d\\s.,]*)\\s*\\$?\\.?\\s*$', 'iu'));
       if (m) { name = m[1]; qty = parseNum(m[2]); price = parseNum(m[3]); }
@@ -162,9 +220,14 @@
       <td><button type="button" class="ghost danger" data-del="${i}" aria-label="Qatorni o'chirish">×</button></td></tr>`).join('');
     updShipTotal();
   }
+  // Discount for the shipment being edited: its own when editing, else the firm's current one.
+  let shipDiscount = 0;
+  function firmDiscount() { return (firms.find((x) => x.id === firm) || {}).discountPct || 0; }
   function updShipTotal() {
     let t = 0; items.forEach((it, i) => { const s = it.qty * it.price; t += s; const c = $('is' + i); if (c) c.textContent = fmt(s); });
-    $('shipTotal').textContent = fmt(t);
+    const net = Math.round(t * (1 - shipDiscount / 100) * 100) / 100;
+    $('shipTotal').textContent = fmt(shipDiscount ? net : t);
+    $('shipDisc').textContent = shipDiscount ? fmt(t) + ' $ − ' + fmt(shipDiscount) + '% chegirma' : '';
   }
   $('itemRows').addEventListener('input', (e) => { const i = e.target.dataset.i, f = e.target.dataset.f; if (i == null) return; items[i][f] = f === 'name' ? e.target.value : parseNum(e.target.value); updShipTotal(); });
   $('itemRows').addEventListener('click', (e) => { const d = e.target.dataset.del; if (d != null) { items.splice(+d, 1); drawItems(); } });
@@ -174,21 +237,26 @@
     if (!parsed.length) { msg('shipMsg', 'Ro\'yxatdan tovar topilmadi. Qatorlarni «nomi – soni» ko\'rinishida yozing.', true); return; }
     items = items.filter((it) => it.name.trim()).concat(parsed);
     if (parsed.dest && !$('shipNote').value.trim()) $('shipNote').value = parsed.dest;
+    if (parsed.date) $('shipDate').value = parsed.date;
     const noPrice = parsed.filter((p) => !p.price).length;
     drawItems();
     msg('shipMsg', parsed.length + ' ta tovar ajratildi' + (noPrice ? ', ' + noPrice + ' tasiga narx yozing' : ''));
   };
-  function resetShip() { items = []; shipEditId = null; $('shipDate').value = today(); $('shipNote').value = ''; $('shipPaste').value = ''; $('shipEditing').hidden = true; drawItems(); }
+  function resetShip() { shipDiscount = firmDiscount(); items = []; shipEditId = null; $('shipDate').value = today(); $('shipNote').value = ''; $('shipPaste').value = ''; $('shipEditing').hidden = true; drawItems(); }
   $('shipCancel').onclick = () => { resetShip(); msg('shipMsg', ''); showTab('ledger'); };
   $('shipForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const clean = items.filter((it) => it.name.trim() && it.qty > 0).map((it) => ({ name: it.name.trim(), qty: it.qty, price: it.price || 0 }));
     if (!clean.length) { msg('shipMsg', 'Kamida bitta tovar va uning sonini kiriting.', true); return; }
-    const total = clean.reduce((s, it) => s + it.qty * it.price, 0);
+    const total = clean.reduce((s, it) => s + it.qty * it.price, 0) * (1 - shipDiscount / 100);
     const prev = shipEditId && entries.find((x) => x.id === shipEditId);
-    const data = { kind: 'shipment', date: $('shipDate').value || today(), note: $('shipNote').value.trim(), items: clean, createdAt: prev ? prev.createdAt : Date.now(), source: prev ? prev.source : 'app', sender: prev ? prev.sender : null };
+    const data = { kind: 'shipment', date: $('shipDate').value || today(), note: $('shipNote').value.trim(), items: clean, discountPct: shipDiscount, createdAt: prev ? prev.createdAt : Date.now(), source: prev ? prev.source : 'app', sender: prev ? prev.sender : null };
     const btn = e.submitter; if (btn) btn.disabled = true;
-    try { await saveEntry(shipEditId, data); resetShip(); msg('shipMsg', 'Saqlandi: ' + fmt(total) + ' $'); haptic('success'); showTab('ledger'); }
+    try {
+      await saveEntry(shipEditId, data); resetShip(); haptic('success');
+      if (photoQueue.length) { loadPhotoList(photoQueue.shift()); msg('shipMsg', 'Saqlandi: ' + fmt(total) + ' $. Keyingi ro\'yxat ochildi (' + (photoQueue.length + 1) + ' ta qoldi).'); }
+      else { msg('shipMsg', 'Saqlandi: ' + fmt(total) + ' $'); showTab('ledger'); }
+    }
     catch (err) { msg('shipMsg', err.message, true); haptic('error'); }
     finally { if (btn) btn.disabled = false; }
   });
@@ -264,7 +332,7 @@
         const noPrice = its.filter((i) => !i.price).length;
         const src = e.source === 'telegram' ? ' · Telegram' : '';
         const desc = isS
-          ? esc(its.slice(0, 2).map((i) => i.name + ' ' + fmt(i.qty) + ' k').join(', ')) + (its.length > 2 ? ' va yana ' + (its.length - 2) + ' ta' : '') + `<small>${e.note ? esc(e.note) : 'manzil yo\'q'}${src}${noPrice ? ' · <span style="color:var(--debt)">' + noPrice + ' tasi narxsiz</span>' : ''}</small>`
+          ? esc(its.slice(0, 2).map((i) => i.name + ' ' + fmt(i.qty) + ' k').join(', ')) + (its.length > 2 ? ' va yana ' + (its.length - 2) + ' ta' : '') + `<small>${e.note ? esc(e.note) : 'manzil yo\'q'}${e.discountPct ? ' · −' + fmt(e.discountPct) + '% (' + fmt(e.gross) + ' $ dan)' : ''}${src}${noPrice ? ' · <span style="color:var(--debt)">' + noPrice + ' tasi narxsiz</span>' : ''}</small>`
           : esc(e.note || 'To\'lov') + '<small>' + [e.sumUzs ? fmt(e.sumUzs) + ' so\'m, kurs ' + fmt(e.rate) : '', e.source === 'telegram' ? 'Telegram' : ''].filter(Boolean).join(' · ') + '</small>';
         const open = openDetail.has(e.id);
         return `<div class="card">
@@ -294,7 +362,7 @@
     if (b.dataset.act === 'open') { openDetail.has(id) ? openDetail.delete(id) : openDetail.add(id); render(); }
     else if (b.dataset.act === 'edit') {
       if (e.kind === 'shipment') {
-        shipEditId = id; items = (e.items || []).map((i) => Object.assign({}, i)); $('shipDate').value = e.date; $('shipNote').value = e.note || ''; $('shipPaste').value = '';
+        shipEditId = id; shipDiscount = e.discountPct || 0; items = (e.items || []).map((i) => Object.assign({}, i)); $('shipDate').value = e.date; $('shipNote').value = e.note || ''; $('shipPaste').value = '';
         $('shipEditing').hidden = false; drawItems(); showTab('ship');
       } else {
         payEditId = id; setMethod(e.method === 'perechisleniya' ? 'perechisleniya' : 'naqd'); $('payDate').value = e.date;
