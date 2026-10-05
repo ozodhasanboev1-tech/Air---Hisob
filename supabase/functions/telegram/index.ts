@@ -7,7 +7,7 @@
 // Telegram calls this URL with the X-Telegram-Bot-Api-Secret-Token header set by setWebhook.
 
 import {
-  createFirm, deleteEntry, Entry, Firm, firmByChat, fmt, getMeta, listEntries, listFirms, rest, rowToEntry,
+  createFirm, deleteEntry, Entry, Firm, firmByChat, fmt, getMeta, listEntries, listFirms, loadPhoto, rest, rowToEntry,
   setMeta, shipmentTotals, storePhoto, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
 } from "../_shared/db.ts";
 import { downloadFile, send, tg } from "../_shared/telegram.ts";
@@ -456,31 +456,48 @@ async function readPhoto(msg: any, firm: Firm) {
   const photo = await storePhoto(`${firm.id}/${docId(msg.chat.id, msg.message_id)}.${ext}`, bytes, mediaType)
     .catch((err) => (console.error("storePhoto", err), undefined));
   const original = { photo, text: (msg.caption || "").trim() || undefined, from: sender, at: msg.date * 1000 };
+  await ocrPhoto(firm, docId(msg.chat.id, msg.message_id), msg.date, sender, original, bytes, mediaType, false);
+}
+
+// Reads one list photo into shipments `${base}-1`, `${base}-2`, …; an unread photo leaves one empty
+// shipment (so the photo is kept and can be filled in the app), which the hourly job retries.
+async function ocrPhoto(
+  firm: Firm, base: string, unixDate: number, sender: string, original: any,
+  bytes: Uint8Array, mediaType: string, retry: boolean,
+): Promise<boolean> {
   const prices = await priceMap(firm);
-  const base = docId(msg.chat.id, msg.message_id);
-  // An unread photo still gets an empty shipment, so the photo is kept and can be filled in the app.
   const unread = async (why: string) => {
+    const tries = (original.ocrTries || 0) + 1;
     await upsertEntry({
-      id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(msg.date), note: "📷 o'qilmagan rasm",
+      id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(unixDate), note: "📷 o'qilmagan rasm",
       items: [], total: 0, gross: 0, discountPct: Number(firm.discount_pct) || 0,
-      createdAt: msg.date * 1000, source: "telegram", sender, original,
+      createdAt: unixDate * 1000, source: "telegram", sender, original: { ...original, ocrTries: tries },
     });
-    await notifyOwners(`📷 «${firm.name}»: ${why}. Rasm ilovada saqlandi, ro'yxatni o'sha yerda kiriting.`);
+    if (!retry) {
+      await notifyOwners(`📷 «${firm.name}»: ${why}. Bot bir soatdan keyin yana urinib ko'radi; rasm ilovada saqlandi.`);
+    } else if (tries >= RETRY_LIMIT) {
+      await notifyOwners(`📷 «${firm.name}»: ${sender} ${when(unixDate)} dagi rasmni ${tries} marta o'qib bo'lmadi (${why}). Ro'yxatni ilovada qo'lda kiriting.`);
+    }
   };
   let lists;
   try {
     lists = await readListPhoto(bytesToBase64(bytes), mediaType, Object.keys(firm.prices || {}));
   } catch (err) {
     console.error(err);
-    return void await unread(`rasmni o'qib bo'lmadi (${String(err).slice(0, 120)})`);
+    await unread(`rasmni o'qib bo'lmadi (${String(err).slice(0, 120)})`);
+    return false;
   }
-  if (!lists.length) return void await unread("rasmda ro'yxat topilmadi");
+  if (!lists.length) {
+    await unread("rasmda ro'yxat topilmadi");
+    return false;
+  }
+  const { ocrTries: _, ...kept } = original;
   const lines: string[] = [];
   let sum = 0;
   for (const [i, l] of lists.entries()) {
     const items = l.items.map((it) => ({ ...it, price: prices[norm(it.name)] || 0 }));
     const { gross, total } = shipmentTotals(items, firm.discount_pct);
-    const date = l.date || tashkentDate(msg.date);
+    const date = l.date || tashkentDate(unixDate);
     await upsertEntry({
       id: `${base}-${i + 1}`,
       firm: firm.id,
@@ -491,10 +508,10 @@ async function readPhoto(msg: any, firm: Firm) {
       total,
       gross,
       discountPct: Number(firm.discount_pct) || 0,
-      createdAt: msg.date * 1000 + i,
+      createdAt: unixDate * 1000 + i,
       source: "telegram",
       sender,
-      original,
+      original: kept,
     });
     sum += total;
     const noPrice = items.filter((it) => !it.price).length;
@@ -504,7 +521,30 @@ async function readPhoto(msg: any, firm: Firm) {
   const t = await getMeta("telegram");
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
   const disc = firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
-  await notifyOwners(`📷 «${firm.name}» rasmi o'qildi${disc}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
+  const head = retry ? `📷 «${firm.name}»: ${sender} ${when(unixDate)} dagi rasm qayta urinishda o'qildi${disc}` : `📷 «${firm.name}» rasmi o'qildi${disc}`;
+  await notifyOwners(`${head}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
+  return true;
+}
+
+const RETRY_LIMIT = 5;
+
+// Photos left unread (Gemini busy or down), retried once an hour from the same hourly job.
+async function retryUnreadPhotos() {
+  if (!hasOcrKey()) return;
+  const rows: Entry[] = (await rest(`entries?kind=eq.shipment&source=eq.telegram&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=*&order=created_at.asc`))
+    .map(rowToEntry)
+    .filter((e: Entry) => e.original?.photo && !e.original?.deletedAt && !(e.items || []).length && ((e.original as any).ocrTries || 1) < RETRY_LIMIT);
+  if (!rows.length) return;
+  const firms = await listFirms();
+  const started = Date.now();
+  for (const e of rows) {
+    if (Date.now() - started > 60_000) break; // stay well inside the function's time limit
+    const firm = firms.find((f) => f.id === e.firm);
+    if (!firm) continue;
+    const { bytes, mediaType } = await loadPhoto(e.original!.photo!);
+    await ocrPhoto(firm, e.id.replace(/-1$/, ""), Math.floor((e.original!.at || e.createdAt || Date.now()) / 1000),
+      e.sender || e.original!.from || "", e.original, bytes, mediaType, true);
+  }
 }
 
 async function photoEdited(msg: any, firm: Firm) {
@@ -523,7 +563,8 @@ async function maybeCheckDeleted() {
   const t = await getMeta("deletedCheck");
   if (t.at && Date.now() - Date.parse(t.at) < 3600_000) return;
   await setMeta("deletedCheck", { at: new Date().toISOString() });
-  await checkDeleted();
+  await checkDeleted().catch((err) => console.error("checkDeleted", err));
+  await retryUnreadPhotos().catch((err) => console.error("retryUnreadPhotos", err));
 }
 
 // Telegram never tells a bot that a message was deleted. Clearing the bot's (absent) reaction on a

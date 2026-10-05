@@ -89,6 +89,14 @@ export async function storePhoto(path: string, bytes: Uint8Array, mediaType: str
   return path;
 }
 
+export async function loadPhoto(path: string): Promise<{ bytes: Uint8Array; mediaType: string }> {
+  const res = await fetch(`${SB_URL}/storage/v1/object/originals/${path}`, {
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+  });
+  if (!res.ok) throw new Error(`storage ${res.status}: ${await res.text()}`);
+  return { bytes: new Uint8Array(await res.arrayBuffer()), mediaType: res.headers.get("content-type") || "image/jpeg" };
+}
+
 export async function photoUrl(path: string, expiresIn = 3600): Promise<string> {
   const res = await fetch(`${SB_URL}/storage/v1/object/sign/originals/${path}`, {
     method: "POST",
