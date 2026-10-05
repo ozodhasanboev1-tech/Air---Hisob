@@ -468,7 +468,14 @@ async function ocrPhoto(
   bytes: Uint8Array, mediaType: string, retry: boolean,
 ): Promise<boolean> {
   const prices = await priceMap(firm);
+  // A retry must never overwrite a shipment that was filled in meanwhile (in the app or by hand).
+  const stillUnread = async () => {
+    if (!retry) return true;
+    const [row] = await rest(`entries?id=eq.${encodeURIComponent(`${base}-1`)}&select=note,items`);
+    return !!row && row.note === "📷 o'qilmagan rasm" && !(row.items || []).length;
+  };
   const unread = async (why: string) => {
+    if (!(await stillUnread())) return;
     const tries = (original.ocrTries || 0) + 1;
     await upsertEntry({
       id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(unixDate), note: "📷 o'qilmagan rasm",
@@ -493,6 +500,7 @@ async function ocrPhoto(
     await unread("rasmda ro'yxat topilmadi");
     return false;
   }
+  if (!(await stillUnread())) return false;
   const { ocrTries: _, ...kept } = original;
   const lines: string[] = [];
   let sum = 0;
