@@ -104,3 +104,4 @@ td.r,th.r{text-align:right}
 .orig{background:var(--sunk);border-radius:8px;padding:8px;display:grid;gap:6px}
 .orig img{display:block;max-width:100%;border-radius:6px}
 .orig pre{margin:0;white-space:pre-wrap;font:inherit;font-size:14px}
+.orig details summary{cursor:pointer;color:var(--muted);font-size:13px}

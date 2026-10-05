@@ -37,7 +37,10 @@ export type Entry = {
   createdAt: number;
   source?: string;
   sender?: string | null;
-  original?: { text?: string; photo?: string; from?: string; at?: number } | null;
+  original?: {
+    text?: string; photo?: string; from?: string; at?: number;
+    editedAt?: number; history?: { text: string; at?: number }[];
+  } | null;
 };
 
 export function rowToEntry(r: any): Entry {

@@ -91,7 +91,7 @@ async function handle(update: any) {
     if (isPrivate) return void await send(chat.id, "Tushunmadim.\n\n" + HELP);
   }
 
-  if (isGroup && firm) await shipment(msg, text, firm);
+  if (isGroup && firm) await shipment(msg, text, firm, !!update.edited_message);
 }
 
 // ---------- groups and firms ----------
@@ -333,19 +333,49 @@ async function isPoster(from: any, firm: Firm): Promise<boolean> {
   return false;
 }
 
-async function shipment(msg: any, text: string, firm: Firm): Promise<boolean> {
+async function shipment(msg: any, text: string, firm: Firm, edited = false): Promise<boolean> {
   const from = msg.from || {};
   if (!text || !(await isPoster(from, firm))) return false;
 
-  const lists = parseShipments(text);
-  if (!lists.length) return false;
-  const prices = await priceMap(firm);
   const base = docId(msg.chat.id, msg.message_id);
+  // On an edit, the shipments this post produced before (one, or base-1, base-2… for several lists).
+  const before: Entry[] = edited
+    ? (await rest(`entries?or=(id.eq.${base},id.like.${base}-*)&select=*&order=created_at.asc`)).map(rowToEntry)
+    : [];
+  const lists = parseShipments(text);
+  if (!lists.length) {
+    if (before.length) {
+      await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi yuk xabarini o'zgartirdi, endi u yuk ro'yxatiga o'xshamaydi:\n«${text}»\n\nYozuv o'zgarmadi. Kerak bo'lsa ilovada tuzating yoki o'chiring.`);
+    }
+    return false;
+  }
+  if (edited && !before.length) {
+    // Never recorded, or deleted in the app: record it as new, but say so.
+    edited = false;
+    await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi xabarni o'zgartirdi. Bu yuk bazada yo'q edi, shuning uchun yangi yuk sifatida yozildi. Keragi bo'lmasa ilovada o'chiring.`);
+  }
+
+  const prev = before[0]?.original;
+  const history = prev?.text && prev.text !== text
+    ? [...(prev.history || []), { text: prev.text, at: prev.editedAt || prev.at }]
+    : prev?.history || [];
+  const original = {
+    text, from: who(from), at: msg.date * 1000,
+    ...(msg.edit_date ? { editedAt: msg.edit_date * 1000 } : {}),
+    ...(history.length ? { history } : {}),
+  };
+
+  const prices = await priceMap(firm);
+  const ids: string[] = [];
+  const lines: string[] = [];
   for (const [i, l] of lists.entries()) {
     const items = l.items.map((it) => ({ ...it, price: prices[norm(it.name)] || 0 }));
     const { gross, total } = shipmentTotals(items, firm.discount_pct);
+    const id = lists.length > 1 ? `${base}-${i + 1}` : base;
+    ids.push(id);
+    lines.push(`${l.note || "Yuk"}: ${l.items.map((it) => `${it.name} ${it.qty}`).join(", ")} = ${fmt(total)} $`);
     await upsertEntry({
-      id: lists.length > 1 ? `${base}-${i + 1}` : base,
+      id,
       firm: firm.id,
       kind: "shipment",
       date: l.date || tashkentDate(msg.date),
@@ -356,13 +386,31 @@ async function shipment(msg: any, text: string, firm: Firm): Promise<boolean> {
       discountPct: Number(firm.discount_pct) || 0,
       createdAt: msg.date * 1000 + i,
       source: "telegram",
-      sender: [from.first_name, from.last_name].filter(Boolean).join(" "),
-      original: { text, from: [from.first_name, from.last_name].filter(Boolean).join(" "), at: msg.date * 1000 },
+      sender: who(from),
+      original,
     });
+  }
+  // The post now holds fewer lists than before: drop the shipments it no longer has.
+  for (const b of before) if (!ids.includes(b.id)) await deleteEntry(b.id);
+
+  if (edited) {
+    const was = before.reduce((s, b) => s + (b.total || 0), 0);
+    const now = (await rest(`entries?or=(id.eq.${base},id.like.${base}-*)&select=total`))
+      .reduce((s: number, r: any) => s + Number(r.total || 0), 0);
+    await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi yukni o'zgartirdi.\n`
+      + `Oldin: ${fmt(was)} $\nEndi: ${fmt(now)} $\n${lines.join("\n")}\n\n`
+      + `Bot yozuvni yangisiga almashtirdi; eski matn ilovada «Asli» ichida turibdi.`);
   }
   const t = await getMeta("telegram");
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
   return true;
+}
+
+const who = (from: any) => [from.first_name, from.last_name].filter(Boolean).join(" ");
+// "05.10 09:09" in Tashkent time.
+function when(unixSec: number): string {
+  const d = new Date(unixSec * 1000 + 5 * 3600 * 1000).toISOString();
+  return `${d.slice(8, 10)}.${d.slice(5, 7)} ${d.slice(11, 16)}`;
 }
 
 // The firm's price list first, then the latest positive price seen in its earlier shipments.
