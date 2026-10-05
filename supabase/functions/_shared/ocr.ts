@@ -91,30 +91,35 @@ const GEMINI_SCHEMA = {
 
 async function readWithGemini(base64: string, mediaType: string, knownNames: string[]) {
   const preferred = Deno.env.get("GEMINI_MODEL");
-  const models = preferred ? [preferred] : ["gemini-flash-latest", "gemini-2.5-flash"];
+  // Free-tier models get "503 high demand" at busy hours: wait and retry, then try the next model.
+  const models = preferred ? [preferred] : ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
   let lastError = "";
   for (const model of models) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": Deno.env.get("GEMINI_API_KEY")! },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM }] },
-        contents: [{
-          role: "user",
-          parts: [
-            { inline_data: { mime_type: mediaType, data: base64 } },
-            { text: `Transcribe the shipment lists in this photo. ${knownText(knownNames)}` },
-          ],
-        }],
-        generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: GEMINI_SCHEMA },
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 404) { lastError = `Gemini model ${model} not found`; continue; }
-    if (!res.ok) throw new Error(`Gemini ${res.status}: ${data?.error?.message || "error"}`);
-    const text = (data.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("");
-    if (!text) throw new Error(`Gemini returned no text (${data.candidates?.[0]?.finishReason || data.promptFeedback?.blockReason || "empty"})`);
-    return JSON.parse(text);
+    for (const wait of [0, 3000, 8000]) {
+      if (wait) await new Promise((r) => setTimeout(r, wait));
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": Deno.env.get("GEMINI_API_KEY")! },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM }] },
+          contents: [{
+            role: "user",
+            parts: [
+              { inline_data: { mime_type: mediaType, data: base64 } },
+              { text: `Transcribe the shipment lists in this photo. ${knownText(knownNames)}` },
+            ],
+          }],
+          generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: GEMINI_SCHEMA },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 404) { lastError = `Gemini model ${model} not found`; break; }
+      if ([429, 500, 503].includes(res.status)) { lastError = `Gemini ${res.status}: ${data?.error?.message || "busy"}`; continue; }
+      if (!res.ok) throw new Error(`Gemini ${res.status}: ${data?.error?.message || "error"}`);
+      const text = (data.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("");
+      if (!text) throw new Error(`Gemini returned no text (${data.candidates?.[0]?.finishReason || data.promptFeedback?.blockReason || "empty"})`);
+      return JSON.parse(text);
+    }
   }
   throw new Error(lastError);
 }

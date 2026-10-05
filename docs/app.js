@@ -16,7 +16,8 @@
   const norm = (s) => String(s).toLowerCase().replace(/[абвекмнорстух]/g, (c) => LOOKALIKE[c]).replace(/\s+/g, ' ').trim();
 
   let allEntries = [], entries = [], firms = [], firm = 'air', priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
-  const openDetail = new Set();
+  const openDetail = new Set(); // shipments whose item list the user folded away
+  const openDays = new Set();
   // The original Telegram post (photo or text) behind a shipment, loaded on demand.
   const origShown = new Set(), origData = {};
   function origHtml(id) {
@@ -338,7 +339,7 @@
     if (!shown.length) {
       box.innerHTML = '<div class="empty"><b>Hali yozuv yo\'q</b>Guruhga yuk ro\'yxati tashlansa, bot o\'zi qo\'shadi. To\'lovni botga «naqd 500$» deb yozing yoki «+ To\'lov»dan kiriting.</div>';
     } else {
-      box.innerHTML = shown.map((e) => {
+      const card = (e) => {
         const isS = e.kind === 'shipment';
         const tag = isS ? '<span class="tag ship">YUK</span>' : (e.method === 'perechisleniya' ? '<span class="tag bank">PERECH.</span>' : '<span class="tag cash">NAQD</span>');
         const its = e.items || [];
@@ -347,7 +348,7 @@
         const desc = isS
           ? esc(its.slice(0, 2).map((i) => i.name + ' ' + fmt(i.qty) + ' k').join(', ')) + (its.length > 2 ? ' va yana ' + (its.length - 2) + ' ta' : '') + `<small>${e.note ? esc(e.note) : 'manzil yo\'q'}${e.discountPct ? ' · −' + fmt(e.discountPct) + '% (' + fmt(e.gross) + ' $ dan)' : ''}${src}${noPrice ? ' · <span style="color:var(--debt)">' + noPrice + ' tasi narxsiz</span>' : ''}</small>`
           : esc(e.note || 'To\'lov') + '<small>' + [e.sumUzs ? fmt(e.sumUzs) + ' so\'m, kurs ' + fmt(e.rate) : '', e.source === 'telegram' ? 'Telegram' : ''].filter(Boolean).join(' · ') + '</small>';
-        const open = openDetail.has(e.id);
+        const open = !openDetail.has(e.id);
         return `<div class="card">
           <div class="top"><span class="when num">${tag}${fmtDate(e.date)}</span><span class="amt num ${isS ? 'plus' : 'minus'}">${isS ? '+' : '−'}${fmt(amountOf(e))} $</span></div>
           <div class="desc">${desc}</div>
@@ -355,7 +356,39 @@
           ${isS && open ? `<ul>${its.map((i) => `<li>${esc(i.name)} — <span class="num">${fmt(i.qty)} × ${i.price ? fmt(i.price) : '?'} = ${fmt(i.qty * i.price)} $</span></li>`).join('')}</ul>` : ''}
           <div class="top"><span class="bal num">Qoldiq: ${fmt(balAfter[e.id])} $</span><span class="acts">${e.original ? `<button class="ghost" data-act="orig" data-id="${esc(e.id)}" aria-expanded="${origShown.has(e.id)}">${origShown.has(e.id) ? 'Aslini yopish' : (e.original.photo ? '📷 Asli' : '💬 Asli') + (e.original.editedAt ? ' ✏️' : '') + (e.original.deletedAt ? ' 🗑' : '')}</button>` : ''}${isS ? `<button class="ghost" data-act="open" data-id="${esc(e.id)}" aria-expanded="${open}">${open ? 'Yopish' : 'Ro\'yxat'}</button>` : ''}<button class="ghost" data-act="edit" data-id="${esc(e.id)}">Tahrirlash</button><button class="ghost danger" data-act="del" data-id="${esc(e.id)}">O'chirish</button></span></div>
         </div>`;
+      };
+      // One summary row per day; tapping it shows that day's shipments (clients, items, photos) and payments.
+      const days = [];
+      shown.forEach((e) => { const d = days[days.length - 1]; if (d && d.date === e.date) d.list.push(e); else days.push({ date: e.date, list: [e] }); });
+      box.innerHTML = days.map((d) => {
+        const ships = d.list.filter((e) => e.kind === 'shipment'), pays = d.list.filter((e) => e.kind !== 'shipment');
+        const sS = ships.reduce((t, e) => t + (e.total || 0), 0), sP = pays.reduce((t, e) => t + (e.amount || 0), 0);
+        const boxes = ships.reduce((t, e) => t + (e.items || []).reduce((u, i) => u + (i.qty || 0), 0), 0);
+        const isOpen = openDays.has(d.date);
+        const who = [...new Set(ships.map((e) => e.note).filter(Boolean))];
+        const parts = [ships.length ? ships.length + ' ta yuk' + (boxes ? ', ' + fmt(boxes) + ' k' : '') : '', pays.length ? pays.length + ' ta to\'lov' : ''].filter(Boolean).join(' · ');
+        // Each photo once, at the top of the day (several clients often share one photo).
+        const seen = new Set(), photos = isOpen ? ships.filter((e) => e.original && e.original.photo && !seen.has(e.original.photo) && seen.add(e.original.photo)) : [];
+        const strip = photos.length ? `<div class="dayphotos">${photos.map((e) => { const o = origData[e.id]; return o && o.photo ? `<a href="${esc(o.photo)}" target="_blank" rel="noopener"><img src="${esc(o.photo)}" alt="Rasm"></a>` : '<span class="ph">📷</span>'; }).join('')}</div>` : '';
+        return `<div class="day${isOpen ? ' open' : ''}">
+          <button class="dayhead" data-act="day" data-day="${d.date}" aria-expanded="${isOpen}">
+            <span class="dl"><b>${fmtDate(d.date)}</b><small>${parts}${who.length ? ' — ' + esc(who.slice(0, 4).join(', ')) + (who.length > 4 ? '…' : '') : ''}</small></span>
+            <span class="dr num">${sS ? '<span class="plus">+' + fmt(sS) + ' $</span>' : ''}${sP ? '<span class="minus">−' + fmt(sP) + ' $</span>' : ''}<small>Qoldiq: ${fmt(balAfter[d.list[0].id])} $</small></span>
+            <span class="chev">${isOpen ? '▴' : '▾'}</span>
+          </button>
+          ${isOpen ? `<div class="daybody">${strip}${d.list.map(card).join('')}</div>` : ''}
+        </div>`;
       }).join('');
+      // Load the photos of an opened day once.
+      days.filter((d) => openDays.has(d.date)).forEach((d) => {
+        const seen = new Set();
+        d.list.filter((e) => e.original && e.original.photo && !seen.has(e.original.photo) && seen.add(e.original.photo)).forEach(async (e) => {
+          if (origData[e.id] && !origData[e.id].error) return;
+          origData[e.id] = { loading: true };
+          try { origData[e.id] = await api('original', { id: e.id }); } catch (err) { origData[e.id] = { error: err.message || 'Yuklanmadi' }; }
+          render();
+        });
+      });
     }
 
     const prod = {};
@@ -372,6 +405,7 @@
   const pendingDel = {};
   $('ledgerRows').addEventListener('click', async (ev) => {
     const b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.act === 'day') { const d = b.dataset.day; openDays.has(d) ? openDays.delete(d) : openDays.add(d); render(); return; }
     const id = b.dataset.id, e = entries.find((x) => x.id === id); if (!e) return;
     if (b.dataset.act === 'open') { openDetail.has(id) ? openDetail.delete(id) : openDetail.add(id); render(); }
     else if (b.dataset.act === 'orig') {
