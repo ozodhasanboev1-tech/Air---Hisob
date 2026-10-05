@@ -28,6 +28,7 @@ const HELP = [
   "Air hisob-kitobi boti.",
   "",
   "To'lov: «naqd 500$», «perech 785 $ Elyor uchun», «perech 5 000 000 so'm kurs 12650». Bot qaysi firmaga ekanini so'raydi. Firma nomini oldinga yozsangiz so'ramaydi: «timson naqd 500$».",
+  "O'qilmagan rasmlar: «qayta o'qi»",
   "Bekor qilish: «otkaz perech 04.10» yoki «otkaz naqd 04.10 500$» (yoki ✅ xabariga javoban «otkaz»)",
   "Qoldiq: «qoldiq» (hamma firmalar) yoki «qoldiq timson»",
   "",
@@ -88,6 +89,7 @@ async function handle(update: any) {
     if (isPrivate && /^\/(start|help|yordam)/i.test(text)) return void await send(chat.id, HELP);
     if (isGroup && FIRM_CMD_RE.test(text)) return void await linkGroup(msg, text.match(FIRM_CMD_RE)![1].trim());
     if (isGroup && POSTER_CMD_RE.test(text)) return void await markPoster(msg, firm);
+    if (isPrivate && /^\/?qayta\b/i.test(text)) return void await rereadNow(chat.id);
     if (isPrivate && BALANCE_RE.test(text)) return void await balance(chat.id, text);
     if (CANCEL_RE.test(text)) return void await cancel(msg, text, isPrivate);
     if (await payment(msg, text, isPrivate, firm, !!update.edited_message)) return;
@@ -528,12 +530,24 @@ async function ocrPhoto(
 
 const RETRY_LIMIT = 5;
 
+// «qayta o'qi» from the owner: retry unread photos right away instead of waiting for the hourly job.
+async function rereadNow(chatId: number) {
+  const rows = await rest(`entries?kind=eq.shipment&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=id`);
+  if (!rows.length) return void await send(chatId, "O'qilmagan rasm yo'q ✅");
+  await send(chatId, `🔄 ${rows.length} ta o'qilmagan rasmni qayta o'qiyapman, natijasini shu yerga yozaman.`);
+  await background((async () => {
+    await retryUnreadPhotos(true);
+    const left = await rest(`entries?kind=eq.shipment&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=id`);
+    if (left.length) await send(chatId, `⏳ ${left.length} ta rasm hali o'qilmadi (Gemini band bo'lishi mumkin). Bot har soatda yana urinadi, yoki birozdan keyin yana «qayta o'qi» deb yozing.`);
+  })());
+}
+
 // Photos left unread (Gemini busy or down), retried once an hour from the same hourly job.
-async function retryUnreadPhotos() {
+async function retryUnreadPhotos(manual = false) {
   if (!hasOcrKey()) return;
   const rows: Entry[] = (await rest(`entries?kind=eq.shipment&source=eq.telegram&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=*&order=created_at.asc`))
     .map(rowToEntry)
-    .filter((e: Entry) => e.original?.photo && !e.original?.deletedAt && !(e.items || []).length && ((e.original as any).ocrTries || 1) < RETRY_LIMIT);
+    .filter((e: Entry) => e.original?.photo && !e.original?.deletedAt && !(e.items || []).length && (manual || ((e.original as any).ocrTries || 1) < RETRY_LIMIT));
   if (!rows.length) return;
   const firms = await listFirms();
   const started = Date.now();
