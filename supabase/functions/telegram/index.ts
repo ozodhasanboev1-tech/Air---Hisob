@@ -80,6 +80,8 @@ async function handle(update: any) {
     }
     return void await photoShipment(msg, firm);
   }
+  // An edited photo post (new picture or caption): not re-read, but the owner is told.
+  if (isGroup && firm && msg.photo && update.edited_message) return void await photoEdited(msg, firm);
   if (!text) return;
 
   if (OWNER_IDS.includes(from.id)) {
@@ -503,6 +505,16 @@ async function readPhoto(msg: any, firm: Firm) {
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
   const disc = firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
   await notifyOwners(`📷 «${firm.name}» rasmi o'qildi${disc}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
+}
+
+async function photoEdited(msg: any, firm: Firm) {
+  const from = msg.from || {};
+  if (!(await isPoster(from, firm))) return;
+  const base = docId(msg.chat.id, msg.message_id);
+  const rows = await rest(`entries?or=(id.eq.${base},id.like.${base}-*)&select=id`);
+  if (!rows.length) return;
+  await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi rasmli yukni o'zgartirdi.`
+    + `\nBot rasmni qayta o'qimadi: ilovada «Asli» bilan solishtirib, kerak bo'lsa yukni tuzating.`);
 }
 
 // ---------- deleted posts ----------
