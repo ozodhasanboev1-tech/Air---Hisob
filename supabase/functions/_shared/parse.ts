@@ -2,7 +2,11 @@
 
 export type Item = { name: string; qty: number; price: number };
 
-export const norm = (s: string) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
+// Lowercase, single spaces, and Cyrillic letters that look Latin folded to Latin, so that a handwritten
+// "750х" (Cyrillic) matches a price typed as "750x".
+const LOOKALIKE: Record<string, string> = { а: "a", б: "b", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x" };
+export const norm = (s: string) =>
+  String(s).toLowerCase().replace(/[абвекмнорстух]/g, (c) => LOOKALIKE[c]).replace(/\s+/g, " ").trim();
 
 // "5 000 000", "5.000.000", "785", "785.50", "1,5" -> number
 export function parseAmount(raw: string): number {
@@ -21,25 +25,58 @@ export function parseAmount(raw: string): number {
   return b.length === 3 ? Number(a + b) : Number(a + "." + b);
 }
 
-// ---------- Бобур's shipment list ----------
-// "Bozorga\nOsvejitel - 200 k\nAir sprey - 15 k" -> items + destination note
-export function parseShipment(text: string): { items: { name: string; qty: number }[]; note: string } {
-  const items: { name: string; qty: number }[] = [];
+// ---------- shipment lists ----------
+// Air (Бобур): "Bozorga\nOsvejitel - 200 k\nAir sprey - 15 k" -> one list, destination as note.
+// Doctor (typed): "Мухиддин 3.10.26\n750х - 10\n..." possibly several lists, each headed by a name and date.
+export type ShipmentList = { note: string; date: string | null; items: { name: string; qty: number }[] };
+
+const DATE_RE = /(\d{1,2})[./](\d{1,2})[./](\d{2,4})/;
+
+export function parseShipments(text: string): ShipmentList[] {
+  const lists: ShipmentList[] = [];
+  let cur: ShipmentList = { note: "", date: null, items: [] };
   const dest: string[] = [];
+  const close = () => {
+    if (cur.items.length) lists.push({ ...cur, note: cur.note || dest.join(", ") });
+  };
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/^[\s\-–—•*·▪️✅➖🔹🔸]+/u, "").trim();
     if (!line) continue;
+    const d = line.match(DATE_RE);
+    if (d) {
+      // A header: "<counterparty> <date>". Starts a new list.
+      close();
+      dest.length = 0;
+      let y = Number(d[3]);
+      if (y < 100) y += 2000;
+      cur = {
+        note: line.replace(d[0], " ").replace(/\s+/g, " ").trim(),
+        date: `${y}-${d[2].padStart(2, "0")}-${d[1].padStart(2, "0")}`,
+        items: [],
+      };
+      continue;
+    }
     const m = line.match(/^(.*?)[\s:=\-–—]+(\d[\d\s.,]*)\s*(k|к|ta|та|шт|kor|кор|karobka|коробка)?\.?\s*$/iu);
     if (m && m[1].trim()) {
       const qty = parseAmount(m[2]);
       if (qty > 0) {
-        items.push({ name: m[1].replace(/[\s:=\-–—]+$/, "").trim(), qty });
+        cur.items.push({ name: m[1].replace(/[\s:=\-–—]+$/, "").trim(), qty });
         continue;
       }
     }
-    if (!/\d/.test(line)) dest.push(line);
+    if (!/\d/.test(line)) {
+      if (cur.items.length && !cur.date) { close(); cur = { note: "", date: null, items: [] }; dest.length = 0; }
+      if (!cur.date) dest.push(line);
+    }
   }
-  return { items, note: dest.join(", ") };
+  close();
+  return lists;
+}
+
+// Single-list form kept for callers that only need items + note.
+export function parseShipment(text: string): { items: { name: string; qty: number }[]; note: string } {
+  const lists = parseShipments(text);
+  return { items: lists.flatMap((l) => l.items), note: lists.map((l) => l.note).filter(Boolean).join(", ") };
 }
 
 // ---------- payments ----------

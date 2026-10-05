@@ -28,6 +28,8 @@ export type Entry = {
   note: string;
   items?: { name: string; qty: number; price: number }[];
   total?: number;
+  gross?: number | null;
+  discountPct?: number | null;
   method?: "naqd" | "perechisleniya" | null;
   amount?: number;
   sumUzs?: number | null;
@@ -35,16 +37,23 @@ export type Entry = {
   createdAt: number;
   source?: string;
   sender?: string | null;
+  original?: {
+    text?: string; photo?: string; from?: string; at?: number;
+    editedAt?: number; deletedAt?: number; history?: { text: string; at?: number }[];
+  } | null;
 };
 
 export function rowToEntry(r: any): Entry {
   return {
     id: r.id, firm: r.firm, kind: r.kind, date: r.date, note: r.note ?? "",
     items: r.items ?? [], total: Number(r.total) || 0,
+    gross: r.gross == null ? null : Number(r.gross),
+    discountPct: r.discount_pct == null ? null : Number(r.discount_pct),
     method: r.method, amount: Number(r.amount) || 0,
     sumUzs: r.sum_uzs == null ? null : Number(r.sum_uzs),
     rate: r.rate == null ? null : Number(r.rate),
     createdAt: Number(r.created_at), source: r.source, sender: r.sender,
+    original: r.original ?? null,
   };
 }
 
@@ -54,6 +63,8 @@ export function entryToRow(e: Entry): Record<string, unknown> {
     id: e.id, firm: e.firm || "air", kind: e.kind, date: e.date, note: e.note ?? "",
     items: isShip ? e.items ?? [] : [],
     total: isShip ? e.total ?? 0 : 0,
+    gross: isShip ? e.gross ?? null : null,
+    discount_pct: isShip ? e.discountPct ?? null : null,
     method: isShip ? null : e.method,
     amount: isShip ? 0 : e.amount ?? 0,
     sum_uzs: isShip ? null : e.sumUzs ?? null,
@@ -62,7 +73,31 @@ export function entryToRow(e: Entry): Record<string, unknown> {
     sender: e.sender ?? null,
     created_at: e.createdAt ?? Date.now(),
     updated_at: new Date().toISOString(),
+    // Left out unless set, so edits from the app keep the stored original.
+    ...(e.original !== undefined ? { original: e.original } : {}),
   };
+}
+
+// ---------- storage: original photos ----------
+export async function storePhoto(path: string, bytes: Uint8Array, mediaType: string) {
+  const res = await fetch(`${SB_URL}/storage/v1/object/originals/${path}`, {
+    method: "POST",
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": mediaType, "x-upsert": "true" },
+    body: bytes,
+  });
+  if (!res.ok) throw new Error(`storage ${res.status}: ${await res.text()}`);
+  return path;
+}
+
+export async function photoUrl(path: string, expiresIn = 3600): Promise<string> {
+  const res = await fetch(`${SB_URL}/storage/v1/object/sign/originals/${path}`, {
+    method: "POST",
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(`storage ${res.status}: ${JSON.stringify(data)}`);
+  return `${SB_URL}/storage/v1${data.signedURL}`;
 }
 
 export async function listEntries(firm?: string): Promise<Entry[]> {
@@ -131,6 +166,7 @@ export type Firm = {
   poster_ids: number[];
   poster_name: string | null;
   prices: Record<string, number>;
+  discount_pct: number;
   sort: number;
 };
 
@@ -162,4 +198,11 @@ export function slugify(name: string): string {
   const s = name.toLowerCase().split("").map((c) => CYR[c] ?? c).join("")
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
   return s || `firma-${Date.now().toString(36)}`;
+}
+
+// Shipment money: gross = sum(qty * price); total = gross minus the firm's discount (e.g. 13% for Doctor).
+export function shipmentTotals(items: { qty: number; price: number }[], discountPct: number) {
+  const gross = Math.round(items.reduce((s, it) => s + it.qty * it.price, 0) * 100) / 100;
+  const total = Math.round(gross * (1 - (discountPct || 0) / 100) * 100) / 100;
+  return { gross, total };
 }

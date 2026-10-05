@@ -99,3 +99,9 @@ td.r,th.r{text-align:right}
 .firms button{flex:0 0 auto;display:grid;gap:0;text-align:left;border-radius:12px;padding:8px 14px;background:var(--surface)}
 .firms button small{font-weight:500;font-size:12px;color:var(--muted)}
 .firms button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.filebtn{display:inline-flex;align-items:center;font-weight:600;color:var(--ink);border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:8px 14px;cursor:pointer}
+#shipDisc{display:block;text-align:right}
+.orig{background:var(--sunk);border-radius:8px;padding:8px;display:grid;gap:6px}
+.orig img{display:block;max-width:100%;border-radius:6px}
+.orig pre{margin:0;white-space:pre-wrap;font:inherit;font-size:14px}
+.orig details summary{cursor:pointer;color:var(--muted);font-size:13px}

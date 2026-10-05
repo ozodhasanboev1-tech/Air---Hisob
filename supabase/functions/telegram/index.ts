@@ -8,10 +8,11 @@
 
 import {
   createFirm, deleteEntry, Entry, Firm, firmByChat, fmt, getMeta, listEntries, listFirms, rest, rowToEntry,
-  setMeta, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
+  setMeta, shipmentTotals, storePhoto, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
 } from "../_shared/db.ts";
-import { send, tg } from "../_shared/telegram.ts";
-import { BALANCE_RE, CANCEL_RE, norm, parseCancel, parsePayment, parseShipment, Payment } from "../_shared/parse.ts";
+import { downloadFile, send, tg } from "../_shared/telegram.ts";
+import { bytesToBase64, hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
+import { BALANCE_RE, CANCEL_RE, norm, parseCancel, parsePayment, parseShipments, Payment } from "../_shared/parse.ts";
 
 const SECRET = Deno.env.get("TG_WEBHOOK_SECRET") || "";
 const OWNER_IDS = (Deno.env.get("OWNER_IDS") || "6158024788").split(",").map((s) => Number(s.trim()));
@@ -45,6 +46,7 @@ Deno.serve(async (req) => {
     if (update?.callback_query) await onButton(update.callback_query);
     else if (update?.my_chat_member) await onAddedToGroup(update.my_chat_member);
     else if (update) await handle(update);
+    await background(maybeCheckDeleted());
   } catch (err) {
     console.error(err);
     const t = await getMeta("telegram").catch(() => ({}));
@@ -70,8 +72,15 @@ async function handle(update: any) {
     if (f) await updateFirm(f.id, { chat_id: msg.migrate_to_chat_id });
     return;
   }
-  if (!text) return;
   const firm = isGroup ? await firmByChat(chat.id) : null;
+  if (isGroup && firm && msg.photo && !update.edited_message) {
+    // Remember the group's latest photo so a bare «/yuk» can point at it.
+    if (msg.from && !msg.from.is_bot) {
+      await setMeta(`lastPhoto:${chat.id}`, { message_id: msg.message_id, date: msg.date, chat: { id: chat.id }, from: msg.from, photo: msg.photo });
+    }
+    return void await photoShipment(msg, firm);
+  }
+  if (!text) return;
 
   if (OWNER_IDS.includes(from.id)) {
     if (isPrivate && /^\/(start|help|yordam)/i.test(text)) return void await send(chat.id, HELP);
@@ -83,7 +92,7 @@ async function handle(update: any) {
     if (isPrivate) return void await send(chat.id, "Tushunmadim.\n\n" + HELP);
   }
 
-  if (isGroup && firm) await shipment(msg, text, firm);
+  if (isGroup && firm) await shipment(msg, text, firm, !!update.edited_message);
 }
 
 // ---------- groups and firms ----------
@@ -116,11 +125,30 @@ async function linkGroup(msg: any, name: string) {
 async function markPoster(msg: any, firm: Firm | null) {
   const chatId = msg.chat.id;
   if (!firm) return void await send(chatId, "Avval guruhni firmaga bog'lang: «/firma Nomi».", msg.message_id);
-  const r = msg.reply_to_message;
+  let r = msg.reply_to_message;
+  // A quote-reply can arrive as external_reply (the original's author in origin.sender_user).
+  if ((!r?.from || r.from.is_bot) && msg.external_reply?.origin?.sender_user) {
+    const x = msg.external_reply;
+    r = { ...x, from: x.origin.sender_user, chat: x.chat || msg.chat, message_id: x.message_id ?? msg.message_id, date: x.origin.date ?? msg.date };
+  }
+  // No usable reply at all: use the last photo posted in this group.
+  if (!r?.from || r.from.is_bot) {
+    const last = await getMeta(`lastPhoto:${chatId}`).catch(() => null);
+    await setMeta("debug_yuk", {
+      at: new Date().toISOString(), keys: Object.keys(msg), reply: msg.reply_to_message ? Object.keys(msg.reply_to_message) : null,
+      replyFromBot: msg.reply_to_message?.from?.is_bot ?? null, replyFromId: msg.reply_to_message?.from?.id ?? null,
+      external: msg.external_reply ? Object.keys(msg.external_reply) : null, hadLast: !!last?.from,
+    }).catch(() => {});
+    if (last?.from) r = last;
+  }
   if (!r?.from || r.from.is_bot) return void await send(chatId, "«/yuk» ni yuk tashlovchining xabariga javob qilib yozing.", msg.message_id);
   const ids = [...new Set([...(firm.poster_ids || []), r.from.id])];
   firm = await updateFirm(firm.id, { poster_ids: ids });
   const who = [r.from.first_name, r.from.last_name].filter(Boolean).join(" ");
+  if (r.photo) {
+    await send(chatId, `✅ ${who} endi «${firm.name}» yuklarini yozadi. Rasm o'qilyapti…`, msg.message_id);
+    return void await photoShipment(r, firm);
+  }
   const added = await shipment(r, (r.text || r.caption || "").trim(), firm);
   await send(chatId, `✅ ${who} endi «${firm.name}» yuklarini yozadi.${added ? " Bu ro'yxat ham yozildi." : ""}`, msg.message_id);
 }
@@ -295,37 +323,95 @@ async function balance(chatId: number, text: string) {
 }
 
 // ---------- shipments ----------
-async function shipment(msg: any, text: string, firm: Firm): Promise<boolean> {
-  const from = msg.from || {};
+async function isPoster(from: any, firm: Firm): Promise<boolean> {
+  const posters = (firm.poster_ids || []).map(Number);
+  if (posters.includes(from.id)) return true;
   const name = [from.first_name, from.last_name, from.username].filter(Boolean).join(" ");
-  const posters = firm.poster_ids || [];
-  let isPoster = posters.includes(from.id);
-  if (!isPoster && !posters.length && firm.poster_name && new RegExp(firm.poster_name, "i").test(name)) {
-    isPoster = true;
+  if (!posters.length && firm.poster_name && new RegExp(firm.poster_name, "i").test(name)) {
     await updateFirm(firm.id, { poster_ids: [from.id] });
+    return true;
   }
-  if (!isPoster || !text) return false;
+  return false;
+}
 
-  const parsed = parseShipment(text);
-  if (!parsed.items.length) return false;
+async function shipment(msg: any, text: string, firm: Firm, edited = false): Promise<boolean> {
+  const from = msg.from || {};
+  if (!text || !(await isPoster(from, firm))) return false;
+
+  const base = docId(msg.chat.id, msg.message_id);
+  // On an edit, the shipments this post produced before (one, or base-1, base-2… for several lists).
+  const before: Entry[] = edited
+    ? (await rest(`entries?or=(id.eq.${base},id.like.${base}-*)&select=*&order=created_at.asc`)).map(rowToEntry)
+    : [];
+  const lists = parseShipments(text);
+  if (!lists.length) {
+    if (before.length) {
+      await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi yuk xabarini o'zgartirdi, endi u yuk ro'yxatiga o'xshamaydi:\n«${text}»\n\nYozuv o'zgarmadi. Kerak bo'lsa ilovada tuzating yoki o'chiring.`);
+    }
+    return false;
+  }
+  if (edited && !before.length) {
+    // Never recorded, or deleted in the app: record it as new, but say so.
+    edited = false;
+    await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi xabarni o'zgartirdi. Bu yuk bazada yo'q edi, shuning uchun yangi yuk sifatida yozildi. Keragi bo'lmasa ilovada o'chiring.`);
+  }
+
+  const prev = before[0]?.original;
+  const history = prev?.text && prev.text !== text
+    ? [...(prev.history || []), { text: prev.text, at: prev.editedAt || prev.at }]
+    : prev?.history || [];
+  const original = {
+    text, from: who(from), at: msg.date * 1000,
+    ...(msg.edit_date ? { editedAt: msg.edit_date * 1000 } : {}),
+    ...(history.length ? { history } : {}),
+  };
+
   const prices = await priceMap(firm);
-  const items = parsed.items.map((it) => ({ ...it, price: prices[norm(it.name)] || 0 }));
-  const total = Math.round(items.reduce((s, it) => s + it.qty * it.price, 0) * 100) / 100;
-  await upsertEntry({
-    id: docId(msg.chat.id, msg.message_id),
-    firm: firm.id,
-    kind: "shipment",
-    date: tashkentDate(msg.date),
-    note: parsed.note,
-    items,
-    total,
-    createdAt: msg.date * 1000,
-    source: "telegram",
-    sender: [from.first_name, from.last_name].filter(Boolean).join(" "),
-  });
+  const ids: string[] = [];
+  const lines: string[] = [];
+  for (const [i, l] of lists.entries()) {
+    const items = l.items.map((it) => ({ ...it, price: prices[norm(it.name)] || 0 }));
+    const { gross, total } = shipmentTotals(items, firm.discount_pct);
+    const id = lists.length > 1 ? `${base}-${i + 1}` : base;
+    ids.push(id);
+    lines.push(`${l.note || "Yuk"}: ${l.items.map((it) => `${it.name} ${it.qty}`).join(", ")} = ${fmt(total)} $`);
+    await upsertEntry({
+      id,
+      firm: firm.id,
+      kind: "shipment",
+      date: l.date || tashkentDate(msg.date),
+      note: l.note,
+      items,
+      total,
+      gross,
+      discountPct: Number(firm.discount_pct) || 0,
+      createdAt: msg.date * 1000 + i,
+      source: "telegram",
+      sender: who(from),
+      original,
+    });
+  }
+  // The post now holds fewer lists than before: drop the shipments it no longer has.
+  for (const b of before) if (!ids.includes(b.id)) await deleteEntry(b.id);
+
+  if (edited) {
+    const was = before.reduce((s, b) => s + (b.total || 0), 0);
+    const now = (await rest(`entries?or=(id.eq.${base},id.like.${base}-*)&select=total`))
+      .reduce((s: number, r: any) => s + Number(r.total || 0), 0);
+    await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi yukni o'zgartirdi.\n`
+      + `Oldin: ${fmt(was)} $\nEndi: ${fmt(now)} $\n${lines.join("\n")}\n\n`
+      + `Bot yozuvni yangisiga almashtirdi; eski matn ilovada «Asli» ichida turibdi.`);
+  }
   const t = await getMeta("telegram");
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
   return true;
+}
+
+const who = (from: any) => [from.first_name, from.last_name].filter(Boolean).join(" ");
+// "05.10 09:09" in Tashkent time.
+function when(unixSec: number): string {
+  const d = new Date(unixSec * 1000 + 5 * 3600 * 1000).toISOString();
+  return `${d.slice(8, 10)}.${d.slice(5, 7)} ${d.slice(11, 16)}`;
 }
 
 // The firm's price list first, then the latest positive price seen in its earlier shipments.
@@ -336,4 +422,132 @@ async function priceMap(firm: Firm): Promise<Record<string, number>> {
   const p = firm.prices || {};
   for (const k of Object.keys(p)) if (p[k] > 0) map[norm(k)] = p[k];
   return map;
+}
+
+// ---------- photo lists (Doctor: handwritten, one list per counterparty) ----------
+function background(p: Promise<unknown>) {
+  const rt = (globalThis as any).EdgeRuntime;
+  const safe = p.catch((err) => console.error("photo", err));
+  if (rt?.waitUntil) rt.waitUntil(safe);
+  else return safe;
+}
+
+async function notifyOwners(text: string) {
+  for (const id of OWNER_IDS) await send(id, text).catch(() => {});
+}
+
+async function photoShipment(msg: any, firm: Firm) {
+  if (!(await isPoster(msg.from || {}, firm))) return;
+  if (!hasOcrKey()) {
+    return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun GEMINI_API_KEY (bepul) hali qo'yilmagan.`);
+  }
+  // Reading a photo takes a while; answer Telegram now and finish in the background.
+  await background(readPhoto(msg, firm));
+}
+
+async function readPhoto(msg: any, firm: Firm) {
+  const sizes = msg.photo;
+  const { bytes, mediaType } = await downloadFile(sizes[sizes.length - 1].file_id);
+  const sender = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ");
+  // Keep the photo itself, exactly as posted, next to the shipments read from it.
+  const ext = mediaType.includes("png") ? "png" : "jpg";
+  const photo = await storePhoto(`${firm.id}/${docId(msg.chat.id, msg.message_id)}.${ext}`, bytes, mediaType)
+    .catch((err) => (console.error("storePhoto", err), undefined));
+  const original = { photo, text: (msg.caption || "").trim() || undefined, from: sender, at: msg.date * 1000 };
+  const prices = await priceMap(firm);
+  const base = docId(msg.chat.id, msg.message_id);
+  // An unread photo still gets an empty shipment, so the photo is kept and can be filled in the app.
+  const unread = async (why: string) => {
+    await upsertEntry({
+      id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(msg.date), note: "📷 o'qilmagan rasm",
+      items: [], total: 0, gross: 0, discountPct: Number(firm.discount_pct) || 0,
+      createdAt: msg.date * 1000, source: "telegram", sender, original,
+    });
+    await notifyOwners(`📷 «${firm.name}»: ${why}. Rasm ilovada saqlandi, ro'yxatni o'sha yerda kiriting.`);
+  };
+  let lists;
+  try {
+    lists = await readListPhoto(bytesToBase64(bytes), mediaType, Object.keys(firm.prices || {}));
+  } catch (err) {
+    console.error(err);
+    return void await unread(`rasmni o'qib bo'lmadi (${String(err).slice(0, 120)})`);
+  }
+  if (!lists.length) return void await unread("rasmda ro'yxat topilmadi");
+  const lines: string[] = [];
+  let sum = 0;
+  for (const [i, l] of lists.entries()) {
+    const items = l.items.map((it) => ({ ...it, price: prices[norm(it.name)] || 0 }));
+    const { gross, total } = shipmentTotals(items, firm.discount_pct);
+    const date = l.date || tashkentDate(msg.date);
+    await upsertEntry({
+      id: `${base}-${i + 1}`,
+      firm: firm.id,
+      kind: "shipment",
+      date,
+      note: l.counterparty,
+      items,
+      total,
+      gross,
+      discountPct: Number(firm.discount_pct) || 0,
+      createdAt: msg.date * 1000 + i,
+      source: "telegram",
+      sender,
+      original,
+    });
+    sum += total;
+    const noPrice = items.filter((it) => !it.price).length;
+    const qty = items.reduce((s, it) => s + it.qty, 0);
+    lines.push(`• ${l.counterparty || "?"} (${ddmm(date)}): ${items.length} xil, ${fmt(qty)} k → ${fmt(total)} $${noPrice ? ` (${noPrice} tasi narxsiz)` : ""}`);
+  }
+  const t = await getMeta("telegram");
+  await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
+  const disc = firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
+  await notifyOwners(`📷 «${firm.name}» rasmi o'qildi${disc}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
+}
+
+// ---------- deleted posts ----------
+// Runs at most once an hour, riding on whatever update arrives (the groups are busy enough).
+async function maybeCheckDeleted() {
+  const t = await getMeta("deletedCheck");
+  if (t.at && Date.now() - Date.parse(t.at) < 3600_000) return;
+  await setMeta("deletedCheck", { at: new Date().toISOString() });
+  await checkDeleted();
+}
+
+// Telegram never tells a bot that a message was deleted. Clearing the bot's (absent) reaction on a
+// post changes nothing that people can see, but fails with "message to react not found" once the post
+// is gone, so it tells us which recent shipment posts were deleted.
+async function checkDeleted(): Promise<number> {
+  const since = tashkentDate(Date.now() / 1000 - 60 * 86400);
+  const rows: Entry[] = (await rest(
+    `entries?kind=eq.shipment&source=eq.telegram&id=like.tg-*&date=gte.${since}&select=*&order=created_at.asc`,
+  )).map(rowToEntry).filter((e: Entry) => !e.original?.deletedAt);
+  const posts = new Map<string, Entry[]>();
+  for (const e of rows) {
+    const m = e.id.match(/^tg-(\d+)-(\d+)(?:-\d+)?$/);
+    if (!m) continue;
+    const key = `${m[1]}-${m[2]}`;
+    posts.set(key, [...(posts.get(key) || []), e]);
+  }
+  const firms = await listFirms();
+  for (const [key, list] of posts) {
+    const [chat, msgId] = key.split("-").map(Number);
+    const r = await tg("setMessageReaction", { chat_id: -chat, message_id: msgId, reaction: [] });
+    if (r?.ok || !/message to react not found/i.test(r?.description || "")) continue;
+    const at = Date.now();
+    for (const e of list) {
+      await rest(`entries?id=eq.${encodeURIComponent(e.id)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ original: { ...(e.original || {}), deletedAt: at } }),
+      });
+    }
+    const e0 = list[0], o = e0.original || {};
+    const firm = firms.find((f) => f.id === e0.firm)?.name || e0.firm;
+    const sum = list.reduce((s, e) => s + (e.total || 0), 0);
+    await notifyOwners(`🗑 «${firm}»: ${o.from || e0.sender || "yuk tashlovchi"} ${o.at ? when(o.at / 1000) : e0.date} dagi yuk xabarini Telegramdan o'chirdi.`
+      + (o.text ? `\n«${o.text.slice(0, 300)}»` : o.photo ? "\n(rasm edi)" : "")
+      + `\n\nIlovada bu yuk hali turibdi: ${fmt(sum)} $. Haqiqatan bekor bo'lgan bo'lsa, ilovada o'chiring.`);
+  }
+  return posts.size;
 }
