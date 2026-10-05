@@ -24,7 +24,7 @@
     if (!o || o.loading) return '<div class="orig"><span class="example">Yuklanmoqda…</span></div>';
     if (o.error) return `<div class="orig"><span class="msg err">${esc(o.error)}</span></div>`;
     const t = (ms) => (ms ? new Date(ms).toLocaleString('uz', { timeZone: 'Asia/Tashkent', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
-    const head = [o.from, t(o.at) && `tashlandi ${t(o.at)}`, o.editedAt && `o'zgartirildi ${t(o.editedAt)}`].filter(Boolean).join(' · ');
+    const head = [o.from, t(o.at) && `tashlandi ${t(o.at)}`, o.editedAt && `o'zgartirildi ${t(o.editedAt)}`, o.deletedAt && `Telegramdan o'chirilgan (${t(o.deletedAt)} da sezildi)`].filter(Boolean).join(' · ');
     const hist = (o.history || []).slice().reverse().map((h) => `<details><summary>Oldingi varianti (${esc(t(h.at))})</summary><pre>${esc(h.text)}</pre></details>`).join('');
     return `<div class="orig"><span class="example">${esc(head)}</span>`
       + (o.photo ? `<a href="${esc(o.photo)}" target="_blank" rel="noopener"><img src="${esc(o.photo)}" alt="Asl rasm"></a>` : '')
@@ -353,7 +353,7 @@
           <div class="desc">${desc}</div>
           ${origShown.has(e.id) ? origHtml(e.id) : ''}
           ${isS && open ? `<ul>${its.map((i) => `<li>${esc(i.name)} — <span class="num">${fmt(i.qty)} × ${i.price ? fmt(i.price) : '?'} = ${fmt(i.qty * i.price)} $</span></li>`).join('')}</ul>` : ''}
-          <div class="top"><span class="bal num">Qoldiq: ${fmt(balAfter[e.id])} $</span><span class="acts">${e.original ? `<button class="ghost" data-act="orig" data-id="${esc(e.id)}" aria-expanded="${origShown.has(e.id)}">${origShown.has(e.id) ? 'Aslini yopish' : (e.original.photo ? '📷 Asli' : '💬 Asli') + (e.original.editedAt ? ' ✏️' : '')}</button>` : ''}${isS ? `<button class="ghost" data-act="open" data-id="${esc(e.id)}" aria-expanded="${open}">${open ? 'Yopish' : 'Ro\'yxat'}</button>` : ''}<button class="ghost" data-act="edit" data-id="${esc(e.id)}">Tahrirlash</button><button class="ghost danger" data-act="del" data-id="${esc(e.id)}">O'chirish</button></span></div>
+          <div class="top"><span class="bal num">Qoldiq: ${fmt(balAfter[e.id])} $</span><span class="acts">${e.original ? `<button class="ghost" data-act="orig" data-id="${esc(e.id)}" aria-expanded="${origShown.has(e.id)}">${origShown.has(e.id) ? 'Aslini yopish' : (e.original.photo ? '📷 Asli' : '💬 Asli') + (e.original.editedAt ? ' ✏️' : '') + (e.original.deletedAt ? ' 🗑' : '')}</button>` : ''}${isS ? `<button class="ghost" data-act="open" data-id="${esc(e.id)}" aria-expanded="${open}">${open ? 'Yopish' : 'Ro\'yxat'}</button>` : ''}<button class="ghost" data-act="edit" data-id="${esc(e.id)}">Tahrirlash</button><button class="ghost danger" data-act="del" data-id="${esc(e.id)}">O'chirish</button></span></div>
         </div>`;
       }).join('');
     }

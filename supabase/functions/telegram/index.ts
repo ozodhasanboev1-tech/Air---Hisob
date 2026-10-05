@@ -46,6 +46,7 @@ Deno.serve(async (req) => {
     if (update?.callback_query) await onButton(update.callback_query);
     else if (update?.my_chat_member) await onAddedToGroup(update.my_chat_member);
     else if (update) await handle(update);
+    await background(maybeCheckDeleted());
   } catch (err) {
     console.error(err);
     const t = await getMeta("telegram").catch(() => ({}));
@@ -502,4 +503,51 @@ async function readPhoto(msg: any, firm: Firm) {
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
   const disc = firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
   await notifyOwners(`📷 «${firm.name}» rasmi o'qildi${disc}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
+}
+
+// ---------- deleted posts ----------
+// Runs at most once an hour, riding on whatever update arrives (the groups are busy enough).
+async function maybeCheckDeleted() {
+  const t = await getMeta("deletedCheck");
+  if (t.at && Date.now() - Date.parse(t.at) < 3600_000) return;
+  await setMeta("deletedCheck", { at: new Date().toISOString() });
+  await checkDeleted();
+}
+
+// Telegram never tells a bot that a message was deleted. Clearing the bot's (absent) reaction on a
+// post changes nothing that people can see, but fails with "message to react not found" once the post
+// is gone, so it tells us which recent shipment posts were deleted.
+async function checkDeleted(): Promise<number> {
+  const since = tashkentDate(Date.now() / 1000 - 60 * 86400);
+  const rows: Entry[] = (await rest(
+    `entries?kind=eq.shipment&source=eq.telegram&id=like.tg-*&date=gte.${since}&select=*&order=created_at.asc`,
+  )).map(rowToEntry).filter((e: Entry) => !e.original?.deletedAt);
+  const posts = new Map<string, Entry[]>();
+  for (const e of rows) {
+    const m = e.id.match(/^tg-(\d+)-(\d+)(?:-\d+)?$/);
+    if (!m) continue;
+    const key = `${m[1]}-${m[2]}`;
+    posts.set(key, [...(posts.get(key) || []), e]);
+  }
+  const firms = await listFirms();
+  for (const [key, list] of posts) {
+    const [chat, msgId] = key.split("-").map(Number);
+    const r = await tg("setMessageReaction", { chat_id: -chat, message_id: msgId, reaction: [] });
+    if (r?.ok || !/message to react not found/i.test(r?.description || "")) continue;
+    const at = Date.now();
+    for (const e of list) {
+      await rest(`entries?id=eq.${encodeURIComponent(e.id)}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ original: { ...(e.original || {}), deletedAt: at } }),
+      });
+    }
+    const e0 = list[0], o = e0.original || {};
+    const firm = firms.find((f) => f.id === e0.firm)?.name || e0.firm;
+    const sum = list.reduce((s, e) => s + (e.total || 0), 0);
+    await notifyOwners(`🗑 «${firm}»: ${o.from || e0.sender || "yuk tashlovchi"} ${o.at ? when(o.at / 1000) : e0.date} dagi yuk xabarini Telegramdan o'chirdi.`
+      + (o.text ? `\n«${o.text.slice(0, 300)}»` : o.photo ? "\n(rasm edi)" : "")
+      + `\n\nIlovada bu yuk hali turibdi: ${fmt(sum)} $. Haqiqatan bekor bo'lgan bo'lsa, ilovada o'chiring.`);
+  }
+  return posts.size;
 }

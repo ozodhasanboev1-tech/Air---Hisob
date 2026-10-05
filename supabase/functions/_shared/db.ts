@@ -39,7 +39,7 @@ export type Entry = {
   sender?: string | null;
   original?: {
     text?: string; photo?: string; from?: string; at?: number;
-    editedAt?: number; history?: { text: string; at?: number }[];
+    editedAt?: number; deletedAt?: number; history?: { text: string; at?: number }[];
   } | null;
 };
 

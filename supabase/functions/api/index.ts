@@ -120,7 +120,7 @@ Deno.serve(async (req) => {
         const [row] = await rest(`entries?id=eq.${encodeURIComponent(body.id)}&select=*`);
         const o = row && rowToEntry(row).original;
         if (!o) return json({ error: "none", message: "Bu yukning asl nusxasi saqlanmagan." }, 404);
-        return json({ ok: true, text: o.text || "", from: o.from || "", at: o.at || null, editedAt: o.editedAt || null, history: o.history || [], photo: o.photo ? await photoUrl(o.photo) : null });
+        return json({ ok: true, text: o.text || "", from: o.from || "", at: o.at || null, editedAt: o.editedAt || null, deletedAt: o.deletedAt || null, history: o.history || [], photo: o.photo ? await photoUrl(o.photo) : null });
       }
       case "ocr": {
         if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun GEMINI_API_KEY (bepul) qo'yilmagan." }, 400);
