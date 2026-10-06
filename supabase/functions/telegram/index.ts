@@ -442,7 +442,7 @@ async function notifyOwners(text: string) {
 
 async function photoShipment(msg: any, firm: Firm) {
   if (!(await isPoster(msg.from || {}, firm))) return;
-  if (!hasOcrKey()) {
+  if (AUTO_OCR && !hasOcrKey()) {
     return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun GEMINI_API_KEY (bepul) hali qo'yilmagan.`);
   }
   // Reading a photo takes a while; answer Telegram now and finish in the background.
@@ -458,8 +458,22 @@ async function readPhoto(msg: any, firm: Firm) {
   const photo = await storePhoto(`${firm.id}/${docId(msg.chat.id, msg.message_id)}.${ext}`, bytes, mediaType)
     .catch((err) => (console.error("storePhoto", err), undefined));
   const original = { photo, text: (msg.caption || "").trim() || undefined, from: sender, at: msg.date * 1000 };
+  if (!AUTO_OCR) {
+    // Photos are read by Claude (a scheduled cloud session), not by the bot: keep an empty shipment
+    // with the photo so the reader finds it, and tell the owner it is queued.
+    const base = docId(msg.chat.id, msg.message_id);
+    await upsertEntry({
+      id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(msg.date), note: "📷 o'qilmagan rasm",
+      items: [], total: 0, gross: 0, discountPct: Number(firm.discount_pct) || 0,
+      createdAt: msg.date * 1000, source: "telegram", sender, original,
+    });
+    return void await notifyOwners(`📷 «${firm.name}»: ${sender} ${when(msg.date)} dagi rasm saqlandi. Claude uni o'qib, ro'yxatni kiritadi va shu yerga yozadi.`);
+  }
   await ocrPhoto(firm, docId(msg.chat.id, msg.message_id), msg.date, sender, original, bytes, mediaType, false);
 }
+
+// Gemini reading is switched off at the owner's request (it kept failing); Claude reads the photos.
+const AUTO_OCR = false;
 
 // Reads one list photo into shipments `${base}-1`, `${base}-2`, …; an unread photo leaves one empty
 // shipment (so the photo is kept and can be filled in the app), which the hourly job retries.
@@ -540,6 +554,10 @@ const RETRY_LIMIT = 5;
 
 // «qayta o'qi» from the owner: retry unread photos right away instead of waiting for the hourly job.
 async function rereadNow(chatId: number) {
+  if (!AUTO_OCR) {
+    const rows = await rest(`entries?kind=eq.shipment&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=id`);
+    return void await send(chatId, rows.length ? `📷 ${rows.length} ta rasm navbatda, Claude ularni o'qib kiritadi.` : "O'qilmagan rasm yo'q ✅");
+  }
   const rows = await rest(`entries?kind=eq.shipment&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=id`);
   if (!rows.length) return void await send(chatId, "O'qilmagan rasm yo'q ✅");
   await send(chatId, `🔄 ${rows.length} ta o'qilmagan rasmni qayta o'qiyapman, natijasini shu yerga yozaman.`);
@@ -552,7 +570,7 @@ async function rereadNow(chatId: number) {
 
 // Photos left unread (Gemini busy or down), retried once an hour from the same hourly job.
 async function retryUnreadPhotos(manual = false) {
-  if (!hasOcrKey()) return;
+  if (!AUTO_OCR || !hasOcrKey()) return;
   const rows: Entry[] = (await rest(`entries?kind=eq.shipment&source=eq.telegram&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=*&order=created_at.asc`))
     .map(rowToEntry)
     .filter((e: Entry) => e.original?.photo && !e.original?.deletedAt && !(e.items || []).length && (manual || ((e.original as any).ocrTries || 1) < RETRY_LIMIT));
