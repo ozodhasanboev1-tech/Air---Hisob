@@ -129,8 +129,13 @@ Deno.serve(async (req) => {
           return json({ error: "invalid", message: "Rasm juda katta yoki firma topilmadi." }, 400);
         }
         const media = ["image/jpeg", "image/png", "image/webp"].includes(body.mediaType) ? body.mediaType : "image/jpeg";
-        const lists = await readListPhoto(body.image, media, Object.keys(f.prices || {}));
-        return json({ ok: true, lists });
+        try {
+          const lists = await readListPhoto(body.image, media, Object.keys(f.prices || {}));
+          return json({ ok: true, lists });
+        } catch (err) {
+          console.error(err);
+          return json({ error: "ocr", message: `Rasmni o'qib bo'lmadi: ${String(err).slice(0, 200)}` }, 502);
+        }
       }
       default:
         return json({ error: "action" }, 400);
