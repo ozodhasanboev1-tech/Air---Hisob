@@ -1,6 +1,6 @@
 // Reads a photo of a handwritten shipment list (Doctor: "Мухиддин 3.10.26 / 750х — 10 / ...").
-// Uses Google Gemini when the GEMINI_API_KEY secret is set (a free AI Studio key, no billing needed),
-// otherwise Claude when ANTHROPIC_API_KEY is set. GEMINI_MODEL overrides the Gemini model.
+// Uses Claude when the ANTHROPIC_API_KEY secret is set (the owner's choice: Gemini kept misreading),
+// otherwise Google Gemini when GEMINI_API_KEY is set. GEMINI_MODEL overrides the Gemini model.
 
 import Anthropic from "npm:@anthropic-ai/sdk";
 
@@ -56,9 +56,9 @@ function knownText(knownNames: string[]) {
 }
 
 export async function readListPhoto(base64: string, mediaType: string, knownNames: string[]): Promise<PhotoList[]> {
-  const parsed = Deno.env.get("GEMINI_API_KEY")
-    ? await readWithGemini(base64, mediaType, knownNames)
-    : await readWithClaude(base64, mediaType, knownNames);
+  const parsed = Deno.env.get("ANTHROPIC_API_KEY")
+    ? await readWithClaude(base64, mediaType, knownNames)
+    : await readWithGemini(base64, mediaType, knownNames);
   return cleanLists(parsed);
 }
 

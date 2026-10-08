@@ -443,7 +443,7 @@ async function notifyOwners(text: string) {
 async function photoShipment(msg: any, firm: Firm) {
   if (!(await isPoster(msg.from || {}, firm))) return;
   if (AUTO_OCR && !hasOcrKey()) {
-    return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun GEMINI_API_KEY (bepul) hali qo'yilmagan.`);
+    return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun ANTHROPIC_API_KEY hali qo'yilmagan.`);
   }
   // Reading a photo takes a while; answer Telegram now and finish in the background.
   await background(readPhoto(msg, firm));
@@ -472,8 +472,9 @@ async function readPhoto(msg: any, firm: Firm) {
   await ocrPhoto(firm, docId(msg.chat.id, msg.message_id), msg.date, sender, original, bytes, mediaType, false);
 }
 
-// Gemini reading is switched off at the owner's request (it kept failing); Claude reads the photos.
-const AUTO_OCR = false;
+// The bot reads photos itself only with Claude (ANTHROPIC_API_KEY): Gemini was switched off at the
+// owner's request. Without the key, photos wait for the hourly Claude session (scripts/photos.py).
+const AUTO_OCR = !!Deno.env.get("ANTHROPIC_API_KEY");
 
 // Reads one list photo into shipments `${base}-1`, `${base}-2`, …; an unread photo leaves one empty
 // shipment (so the photo is kept and can be filled in the app), which the hourly job retries.
@@ -564,11 +565,11 @@ async function rereadNow(chatId: number) {
   await background((async () => {
     await retryUnreadPhotos(true);
     const left = await rest(`entries?kind=eq.shipment&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=id`);
-    if (left.length) await send(chatId, `⏳ ${left.length} ta rasm hali o'qilmadi (Gemini band bo'lishi mumkin). Bot har soatda yana urinadi, yoki birozdan keyin yana «qayta o'qi» deb yozing.`);
+    if (left.length) await send(chatId, `⏳ ${left.length} ta rasm hali o'qilmadi (o'qish xizmati band bo'lishi mumkin). Bot har soatda yana urinadi, yoki birozdan keyin yana «qayta o'qi» deb yozing.`);
   })());
 }
 
-// Photos left unread (Gemini busy or down), retried once an hour from the same hourly job.
+// Photos left unread (OCR busy or down), retried once an hour from the same hourly job.
 async function retryUnreadPhotos(manual = false) {
   if (!AUTO_OCR || !hasOcrKey()) return;
   const rows: Entry[] = (await rest(`entries?kind=eq.shipment&source=eq.telegram&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=*&order=created_at.asc`))
