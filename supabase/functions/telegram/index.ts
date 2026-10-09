@@ -518,9 +518,11 @@ async function ocrPhoto(
   if (!(await stillUnread())) return false;
   const { ocrTries: _, ...kept } = original;
   const lines: string[] = [];
+  const doubts: string[] = [];
   let sum = 0;
   for (const [i, l] of lists.entries()) {
-    const items = l.items.map((it) => ({ ...it, price: prices[norm(it.name)] || 0 }));
+    for (const it of l.items) if (it.doubt) doubts.push(`• ${l.counterparty || "?"}: ${it.name} — ${it.doubt}`);
+    const items = l.items.map(({ doubt: _d, ...it }) => ({ ...it, price: prices[norm(it.name)] || 0 }));
     const { gross, total } = shipmentTotals(items, firm.discount_pct);
     const date = l.date || tashkentDate(unixDate);
     await upsertEntry({
@@ -547,7 +549,8 @@ async function ocrPhoto(
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
   const disc = firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
   const head = retry ? `📷 «${firm.name}»: ${sender} ${when(unixDate)} dagi rasm qayta urinishda o'qildi${disc}` : `📷 «${firm.name}» rasmi o'qildi${disc}`;
-  await notifyOwners(`${head}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
+  const check = doubts.length ? `\n\n⚠️ Rasmda shu sonlar aniq emas, tekshirib qo'ying:\n${doubts.join("\n")}` : "";
+  await notifyOwners(`${head}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $${check}\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
   return true;
 }
 
