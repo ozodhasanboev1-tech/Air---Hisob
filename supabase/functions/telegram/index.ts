@@ -813,8 +813,9 @@ async function skladReport(chatId: number, rest_: string) {
   const date = day ? `${day[3] ? (day[3].length === 2 ? "20" + day[3] : day[3]) : today.slice(0, 4)}-${day[2].padStart(2, "0")}-${day[1].padStart(2, "0")}` : today;
   const { opening, rows } = counted(await stockRows(firm.id));
   const stock = stockOf(rows);
-  // Catalogue order first (as in the owner's stock list), then anything new.
-  const skus = [...new Set([...Object.keys(firm.skus || {}), ...Object.keys(stock)])].filter((k) => k in stock);
+  // Catalogue order by code (as in the owner's stock list), then anything new.
+  const codeOf = (k: string) => firm.skus?.[k]?.code || "99999";
+  const skus = Object.keys(stock).sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
   const dayRows = rows.filter((r) => r.date === date && r.kind !== "opening");
   const sum = (kind: string) => itemsText(Object.entries(stockOf(dayRows.filter((r) => r.kind === kind).map((r) => ({ kind: "in", items: r.items })))).map(([sku, qty]) => ({ sku, qty }))) || "—";
   const out = [
