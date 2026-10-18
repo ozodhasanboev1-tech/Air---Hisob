@@ -74,6 +74,10 @@ async function handle(update: any) {
     return;
   }
   const firm = isGroup ? await firmByChat(chat.id) : null;
+  // Groups not linked to a firm: keep every message raw so its format can be studied first.
+  if (isGroup && !firm && !(OWNER_IDS.includes(from.id) && FIRM_CMD_RE.test(text))) {
+    return void await saveInbox(msg, !!update.edited_message).catch((e) => console.error("inbox", e));
+  }
   if (isGroup && firm && msg.photo && !update.edited_message) {
     // Remember the group's latest photo so a bare «/yuk» can point at it.
     if (msg.from && !msg.from.is_bot) {
@@ -100,6 +104,21 @@ async function handle(update: any) {
 }
 
 // ---------- groups and firms ----------
+async function saveInbox(msg: any, edited: boolean) {
+  const f = msg.from || {};
+  await rest("inbox?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({
+      id: `${msg.chat.id}:${msg.message_id}${edited ? ":" + (msg.edit_date || 0) : ""}`,
+      chat_id: msg.chat.id, chat_title: msg.chat.title ?? null, message_id: msg.message_id,
+      date: new Date(msg.date * 1000).toISOString(), from_id: f.id ?? null,
+      from_name: [f.first_name, f.last_name].filter(Boolean).join(" ") || f.username || null,
+      text: msg.text || msg.caption || null, edited, raw: msg,
+    }),
+  });
+}
+
 async function onAddedToGroup(m: any) {
   const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
   const was = m.old_chat_member?.status, now = m.new_chat_member?.status;
