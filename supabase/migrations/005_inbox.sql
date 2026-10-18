@@ -15,3 +15,4 @@ create table if not exists inbox (
 );
 create index if not exists inbox_chat_date on inbox (chat_id, date);
 alter table inbox enable row level security;
+grant all on table inbox to service_role;

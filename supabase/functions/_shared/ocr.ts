@@ -59,18 +59,19 @@ export function hasOcrKey() {
   return !!(Deno.env.get("GEMINI_API_KEY") || Deno.env.get("ANTHROPIC_API_KEY"));
 }
 
-function knownText(knownNames: string[]) {
-  return knownNames.length
+function knownText(knownNames: string[], extra = "") {
+  return (knownNames.length
     ? `Known product codes for this supplier (use exactly these spellings when a line matches one): ${knownNames.join(", ")}.`
-    : "";
+    : "") + (extra ? ` ${extra}` : "");
 }
 
 // With Claude the photo is read twice independently, and a third time when the two reads disagree.
 // The majority value is kept; every line where the reads differ or the model was unsure gets a `doubt`
 // so the owner is told exactly which number to check.
-export async function readListPhoto(base64: string, mediaType: string, knownNames: string[]): Promise<PhotoList[]> {
-  if (!Deno.env.get("ANTHROPIC_API_KEY")) return mergeReads([cleanLists(await readWithGemini(base64, mediaType, knownNames))]);
-  const read = () => readWithClaude(base64, mediaType, knownNames).then(cleanLists);
+// `extra` adds firm-specific layout notes to the prompt (e.g. the SA warehouse notebook).
+export async function readListPhoto(base64: string, mediaType: string, knownNames: string[], extra = ""): Promise<PhotoList[]> {
+  if (!Deno.env.get("ANTHROPIC_API_KEY")) return mergeReads([cleanLists(await readWithGemini(base64, mediaType, knownNames, extra))]);
+  const read = () => readWithClaude(base64, mediaType, knownNames, extra).then(cleanLists);
   const reads = await Promise.all([read(), read()]);
   if (!sameReads(reads[0], reads[1])) reads.push(await read());
   return mergeReads(reads);
@@ -138,7 +139,7 @@ const GEMINI_SCHEMA = {
   },
 };
 
-async function readWithGemini(base64: string, mediaType: string, knownNames: string[]) {
+async function readWithGemini(base64: string, mediaType: string, knownNames: string[], extra = "") {
   const preferred = Deno.env.get("GEMINI_MODEL");
   // Free-tier models get "503 high demand" at busy hours: wait and retry, then try the next model.
   const models = preferred ? [preferred] : ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
@@ -155,7 +156,7 @@ async function readWithGemini(base64: string, mediaType: string, knownNames: str
             role: "user",
             parts: [
               { inline_data: { mime_type: mediaType, data: base64 } },
-              { text: `Transcribe the shipment lists in this photo. ${knownText(knownNames)}` },
+              { text: `Transcribe the shipment lists in this photo. ${knownText(knownNames, extra)}` },
             ],
           }],
           generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: GEMINI_SCHEMA },
@@ -173,7 +174,7 @@ async function readWithGemini(base64: string, mediaType: string, knownNames: str
   throw new Error(lastError);
 }
 
-async function readWithClaude(base64: string, mediaType: string, knownNames: string[]) {
+async function readWithClaude(base64: string, mediaType: string, knownNames: string[], extra = "") {
   const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") });
   const response = await client.beta.messages.create({
     model: "claude-opus-5-5",
@@ -186,7 +187,7 @@ async function readWithClaude(base64: string, mediaType: string, knownNames: str
       role: "user",
       content: [
         { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg", data: base64 } },
-        { type: "text", text: `Transcribe the shipment lists in this photo. ${knownText(knownNames)}` },
+        { type: "text", text: `Transcribe the shipment lists in this photo. ${knownText(knownNames, extra)}` },
       ],
     }],
   } as any);

@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
     switch (body.action) {
       case "load": {
         const [entries, firms, telegram] = await Promise.all([listEntries(), listFirms(), getMeta("telegram")]);
-        return json({ entries, firms: firms.map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
+        return json({ entries, firms: firms.filter((f) => f.kind !== "sklad").map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
       }
       case "save": {
         const e = cleanEntry(body.entry, await listFirms());

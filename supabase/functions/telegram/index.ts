@@ -12,6 +12,7 @@ import {
 } from "../_shared/db.ts";
 import { downloadFile, send, tg } from "../_shared/telegram.ts";
 import { bytesToBase64, hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
+import { canonical, itemsText, KIND_LABEL, parseSklad, SkladDoc, skuKey, stockOf } from "../_shared/sklad.ts";
 import { BALANCE_RE, CANCEL_RE, norm, parseCancel, parsePayment, parseShipments, Payment } from "../_shared/parse.ts";
 
 const SECRET = Deno.env.get("TG_WEBHOOK_SECRET") || "";
@@ -23,6 +24,8 @@ const docId = (chatId: number, msgId: number) => `tg-${String(chatId).replace("-
 const ddmm = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}`;
 const FIRM_CMD_RE = /^\/?firma(?:@\w+)?\s+(.+)$/i;
 const POSTER_CMD_RE = /^\/yuk(?:@\w+)?\s*$/i;
+const SKLAD_RE = /^\/?(sklad|склад|ombor|омбор)(?![\p{L}])/iu;
+const OSTATKA_RE = /^\/?(ostatka|остатка|ostatok)(?![\p{L}])/iu;
 
 const HELP = [
   "Air hisob-kitobi boti.",
@@ -31,6 +34,8 @@ const HELP = [
   "O'qilmagan rasmlar: «qayta o'qi»",
   "Bekor qilish: «otkaz perech 04.10» yoki «otkaz naqd 04.10 500$» (yoki ✅ xabariga javoban «otkaz»)",
   "Qoldiq: «qoldiq» (hamma firmalar) yoki «qoldiq timson»",
+  "Ombor (SA): «sklad» — qoldiq va bugungi chiqim; «sklad 17.10» — o'sha kun",
+  "Ombor ostatkasi: «ostatka» va keyingi qatorlarda «Са 5л 1000», «Са 2л 300» (sana qatori ixtiyoriy)",
   "",
   "Yangi firma: botni o'sha firmaning guruhiga qo'shing va guruhda «/firma Nomi» deb yozing.",
   "Yuk tashlovchi: o'sha odamning ro'yxatiga javoban «/yuk» deb yozing.",
@@ -78,6 +83,10 @@ async function handle(update: any) {
   if (isGroup && !firm && !(OWNER_IDS.includes(from.id) && FIRM_CMD_RE.test(text))) {
     return void await saveInbox(msg, !!update.edited_message).catch((e) => console.error("inbox", e));
   }
+  if (isGroup && firm?.kind === "sklad") {
+    if (OWNER_IDS.includes(from.id) && FIRM_CMD_RE.test(text)) return void await linkGroup(msg, text.match(FIRM_CMD_RE)![1].trim());
+    return void await skladPost(msg, firm, !!update.edited_message);
+  }
   if (isGroup && firm && msg.photo && !update.edited_message) {
     // Remember the group's latest photo so a bare «/yuk» can point at it.
     if (msg.from && !msg.from.is_bot) {
@@ -94,6 +103,8 @@ async function handle(update: any) {
     if (isGroup && FIRM_CMD_RE.test(text)) return void await linkGroup(msg, text.match(FIRM_CMD_RE)![1].trim());
     if (isGroup && POSTER_CMD_RE.test(text)) return void await markPoster(msg, firm);
     if (isPrivate && /^\/?qayta\b/i.test(text)) return void await rereadNow(chat.id);
+    if (isPrivate && SKLAD_RE.test(text)) return void await skladReport(chat.id, text.replace(SKLAD_RE, ""));
+    if (isPrivate && OSTATKA_RE.test(text)) return void await skladOpening(msg, text.replace(OSTATKA_RE, ""));
     if (isPrivate && BALANCE_RE.test(text)) return void await balance(chat.id, text);
     if (CANCEL_RE.test(text)) return void await cancel(msg, text, isPrivate);
     if (await payment(msg, text, isPrivate, firm, !!update.edited_message)) return;
@@ -143,7 +154,9 @@ async function linkGroup(msg: any, name: string) {
     if (firms.some((f) => f.id === id)) id = `${id}-${Date.now().toString(36)}`;
     firm = await createFirm({ id, name, chat_id: chatId, sort: firms.length });
   }
-  await send(chatId, `✅ Bu guruh endi «${firm.name}» hisobi.\nYuk ro'yxatini kim tashlasa, uning xabariga javoban «/yuk» deb yozing.`, msg.message_id);
+  await send(chatId, firm.kind === "sklad"
+    ? `✅ Bu guruh endi «${firm.name}» ombori. Chiqim, prixod va vozvratlar korobka bo'yicha hisoblanadi.`
+    : `✅ Bu guruh endi «${firm.name}» hisobi.\nYuk ro'yxatini kim tashlasa, uning xabariga javoban «/yuk» deb yozing.`, msg.message_id);
 }
 
 async function markPoster(msg: any, firm: Firm | null) {
@@ -334,7 +347,8 @@ async function balance(chatId: number, text: string) {
   const firms = await listFirms();
   const entries = await listEntries();
   const asked = norm(text.replace(BALANCE_RE, ""));
-  const pick = asked ? firms.filter((f) => norm(f.name).startsWith(asked) || f.id.startsWith(asked)) : firms;
+  const pick = asked ? firms.filter((f) => norm(f.name).startsWith(asked) || f.id.startsWith(asked)) : firms.filter((f) => f.kind !== "sklad");
+  if (pick.length && pick.every((f) => f.kind === "sklad")) return void await skladReport(chatId, asked.replace(/^\S+/, ""));
   if (!pick.length) return void await send(chatId, `«${asked}» degan firma yo'q. Firmalar: ${firms.map((f) => f.name).join(", ")}`);
   const blocks = pick.map((f) => {
     const s = summary(entries.filter((e) => e.firm === f.id));
@@ -667,4 +681,175 @@ async function checkDeleted(): Promise<number> {
       + `\n\nIlovada bu yuk hali turibdi: ${fmt(sum)} $. Haqiqatan bekor bo'lgan bo'lsa, ilovada o'chiring.`);
   }
   return posts.size;
+}
+
+// ---------- ombor (sklad): SA Turkmenistan, boxes per SKU, no money ----------
+type StockRow = { id: string; firm: string; kind: string; date: string; party: string; items: { sku: string; qty: number; doubt?: string }[]; created_at: number; original?: any };
+
+const SKLAD_PHOTO_HINT =
+  "This photo is a page of a warehouse notebook, not a price list. Each record: first line the date (dd.mm.yy), " +
+  "next line the customer name — or «Приход»/«Prixod» for incoming stock, or «Возврат»/«Vozvrat» (then the customer) for a return — " +
+  "then lines like «SA 5л 60», «SA 2л 30», «SA5 70»: the brand SA, a volume in litres, and the number of boxes. " +
+  "Use the customer (or Приход / Возврат <customer>) as counterparty. Give each item name without the SA prefix, e.g. 5л, 2л, 1.5л, 3л к/н, спрей.";
+
+async function stockRows(firmId: string): Promise<StockRow[]> {
+  return await rest(`stock_docs?firm=eq.${encodeURIComponent(firmId)}&select=*&order=date.asc,created_at.asc`);
+}
+
+// Moves before the opening stock's date are already inside it, so they are kept but not counted.
+function counted(rows: StockRow[]) {
+  const opening = rows.find((r) => r.kind === "opening");
+  return { opening, rows: rows.filter((r) => r.kind === "opening" || !opening || r.date >= opening.date) };
+}
+
+async function isSkladPoster(from: any, firm: Firm) {
+  if (from.is_bot) return false;
+  if ((firm.poster_ids || []).map(Number).includes(from.id)) return true;
+  const name = [from.first_name, from.last_name, from.username].filter(Boolean).join(" ");
+  return !!firm.poster_name && new RegExp(firm.poster_name, "i").test(name);
+}
+
+async function skladPost(msg: any, firm: Firm, edited: boolean) {
+  const from = msg.from || {};
+  if (!(await isSkladPoster(from, firm))) return;
+  if (msg.photo) {
+    if (edited) return void await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi rasmni o'zgartirdi. Rasm qayta o'qilmadi, kerak bo'lsa menga ayting.`);
+    return void await background(skladPhoto(msg, firm));
+  }
+  const text = (msg.text || "").trim();
+  if (!text) return;
+  const base = docId(msg.chat.id, msg.message_id);
+  const before: StockRow[] = edited ? await rest(`stock_docs?id=like.${base}-*&select=*&order=created_at.asc`) : [];
+  const docs = parseSklad(text);
+  if (!docs.length) {
+    if (before.length) await notifyOwners(`✏️ «${firm.name}»: ${who(from)} ${when(msg.date)} dagi xabarni o'zgartirdi, endi u ro'yxatga o'xshamaydi:\n«${text}»\nOmbordagi yozuv o'zgarmadi.`);
+    return;
+  }
+  const prev = before[0]?.original;
+  const history = prev?.text && prev.text !== text ? [...(prev.history || []), { text: prev.text, at: prev.editedAt || prev.at }] : prev?.history || [];
+  const original = { text, from: who(from), at: msg.date * 1000, ...(msg.edit_date ? { editedAt: msg.edit_date * 1000 } : {}), ...(history.length ? { history } : {}) };
+  await saveSklad(firm, base, docs, msg.date, who(from), original, before);
+}
+
+async function skladPhoto(msg: any, firm: Firm) {
+  const base = docId(msg.chat.id, msg.message_id);
+  const sender = who(msg.from || {});
+  const sizes = msg.photo;
+  const { bytes, mediaType } = await downloadFile(sizes[sizes.length - 1].file_id);
+  const photo = await storePhoto(`${firm.id}/${base}.${mediaType.includes("png") ? "png" : "jpg"}`, bytes, mediaType)
+    .catch((err) => (console.error("storePhoto", err), undefined));
+  const original = { photo, text: (msg.caption || "").trim() || undefined, from: sender, at: msg.date * 1000 };
+  if (!AUTO_OCR) return void await notifyOwners(`📷 «${firm.name}»: ${sender} ${when(msg.date)} dagi rasm saqlandi, lekin bot rasm o'qiy olmaydi (ANTHROPIC_API_KEY yo'q).`);
+  const known = [...new Set([...Object.values(firm.skus || {}).flatMap((c) => c.aliases || []), ...(await stockRows(firm.id)).flatMap((r) => r.items.map((i) => i.sku))])];
+  let lists;
+  try {
+    lists = await readListPhoto(bytesToBase64(bytes), mediaType, known, SKLAD_PHOTO_HINT);
+  } catch (err) {
+    console.error("sklad ocr", err);
+    return void await notifyOwners(`📷 «${firm.name}»: ${sender} ${when(msg.date)} dagi rasmni o'qiy olmadim (${String(err).slice(0, 80)}). Iltimos, matn qilib yuboring.`);
+  }
+  const docs: SkladDoc[] = [];
+  for (const l of lists) {
+    // Reuse the text parser on the header so «Приход» / «Возврат Алишер» get the right kind.
+    const head = parseSklad(`${l.counterparty}\n1`)[0] || { kind: "out", party: l.counterparty };
+    docs.push({
+      kind: head.kind, date: l.date, party: head.kind === "in" ? "Prixod" : head.party,
+      items: l.items.map((i) => ({ sku: skuKey(i.name), qty: i.qty, ...(i.doubt ? { doubt: i.doubt } : {}) })),
+    });
+  }
+  if (!docs.length) return void await notifyOwners(`📷 «${firm.name}»: ${sender} ${when(msg.date)} dagi rasmda ro'yxat topilmadi. Rasmni tekshiring.`);
+  await saveSklad(firm, base, docs, msg.date, sender, original, []);
+}
+
+async function saveSklad(firm: Firm, base: string, docs: SkladDoc[], unixDate: number, sender: string, original: any, before: StockRow[]) {
+  docs = docs.map((d) => ({ ...d, items: d.items.map((i) => ({ ...i, sku: canonical(i.sku, firm.skus || {}) })) }));
+  const all = await stockRows(firm.id);
+  const knownSkus = new Set([...Object.keys(firm.skus || {}), ...all.filter((r) => !r.id.startsWith(`${base}-`)).flatMap((r) => r.items.map((i) => i.sku))]);
+  const ids: string[] = [];
+  const lines: string[] = [];
+  const warn: string[] = [];
+  const opening = all.find((r) => r.kind === "opening");
+  for (const [i, d] of docs.entries()) {
+    const id = `${base}-${i + 1}`;
+    const date = d.date || tashkentDate(unixDate);
+    ids.push(id);
+    await rest("stock_docs?on_conflict=id", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ id, firm: firm.id, kind: d.kind, date, party: d.party, items: d.items, source: "telegram", sender, original, created_at: unixDate * 1000 + i, updated_at: new Date().toISOString() }),
+    });
+    lines.push(`${KIND_LABEL[d.kind]} ${ddmm(date)}${d.party && d.kind !== "in" ? ` — ${d.party}` : ""}: ${itemsText(d.items)}`);
+    for (const it of d.items) {
+      if (it.doubt) warn.push(`⚠️ ${d.party || KIND_LABEL[d.kind]}: ${it.sku} — ${it.doubt}`);
+      if (!knownSkus.has(it.sku)) warn.push(`🆕 Yangi SKU «${it.sku}» — to'g'ri o'qilganmi?`);
+    }
+    if (opening && date < opening.date) warn.push(`ℹ️ Sana ${ddmm(date)} ostatkadan (${ddmm(opening.date)}) oldin — qoldiqqa qo'shilmadi.`);
+    if (!d.party && d.kind === "out") warn.push("⚠️ Mijoz nomi yozilmagan.");
+  }
+  for (const b of before) if (!ids.includes(b.id)) await rest(`stock_docs?id=eq.${encodeURIComponent(b.id)}`, { method: "DELETE" });
+
+  const stock = stockOf(counted(await stockRows(firm.id)).rows);
+  const touched = [...new Set(docs.flatMap((d) => d.items.map((i) => i.sku)))];
+  for (const k of touched) if ((stock[k] || 0) < 0 && opening) warn.push(`❗ ${k} qoldig'i manfiy: ${stock[k]}`);
+  const head = before.length ? `✏️ «${firm.name}»: ${sender} ${when(unixDate)} dagi xabarni o'zgartirdi. Oldin: ${before.map((b) => itemsText(b.items)).join("; ")}` : `📦 «${firm.name}» · ${sender} ${when(unixDate)}`;
+  await notifyOwners([
+    head, ...lines, "",
+    opening ? `Qoldiq: ${touched.map((k) => `${k} ${stock[k] || 0}`).join(" · ")}` : "Ostatka hali kiritilmagan, qoldiq hisoblanmadi.",
+    ...(warn.length ? ["", ...warn] : []),
+  ].join("\n"));
+}
+
+function skladFirm(firms: Firm[], hint: string) {
+  const h = norm(hint);
+  const sk = firms.filter((f) => f.kind === "sklad");
+  return sk.find((f) => h && (norm(f.name) === h || f.id === h)) || sk[0];
+}
+
+async function skladReport(chatId: number, rest_: string) {
+  const firm = skladFirm(await listFirms(), "");
+  if (!firm) return void await send(chatId, "Ombor firmasi yo'q.");
+  const day = rest_.match(/(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?/);
+  const today = tashkentDate(Date.now() / 1000);
+  const date = day ? `${day[3] ? (day[3].length === 2 ? "20" + day[3] : day[3]) : today.slice(0, 4)}-${day[2].padStart(2, "0")}-${day[1].padStart(2, "0")}` : today;
+  const { opening, rows } = counted(await stockRows(firm.id));
+  const stock = stockOf(rows);
+  // Catalogue order first (as in the owner's stock list), then anything new.
+  const skus = [...new Set([...Object.keys(firm.skus || {}), ...Object.keys(stock)])].filter((k) => k in stock);
+  const dayRows = rows.filter((r) => r.date === date && r.kind !== "opening");
+  const sum = (kind: string) => itemsText(Object.entries(stockOf(dayRows.filter((r) => r.kind === kind).map((r) => ({ kind: "in", items: r.items })))).map(([sku, qty]) => ({ sku, qty }))) || "—";
+  const out = [
+    `📦 ${firm.name} ombori`,
+    opening ? `Qoldiq (korobka), ostatka ${ddmm(opening.date)} dan:` : "Ostatka hali kiritilmagan («ostatka» buyrug'i). Harakatlar yig'indisi:",
+    ...(skus.length ? skus.map((k) => `  ${k} — ${fmt(stock[k])}`) : ["  —"]),
+    "",
+    `${ddmm(date)}: chiqim ${sum("out")} · prixod ${sum("in")} · vozvrat ${sum("return")}`,
+    ...dayRows.map((r) => `  ${KIND_LABEL[r.kind as keyof typeof KIND_LABEL]}${r.party && r.kind !== "in" ? ` ${r.party}` : ""}: ${itemsText(r.items)}`),
+    "",
+    tashkentNow(),
+  ];
+  await send(chatId, out.join("\n"));
+}
+
+// «ostatka [SA]\n18.10.26\nСа 5л 1000\nСа 2л 300» — replaces the opening stock.
+async function skladOpening(msg: any, body: string) {
+  const firms = await listFirms();
+  const [first, ...more] = body.split(/\r?\n/);
+  const firm = skladFirm(firms, first.trim());
+  if (!firm) return void await send(msg.chat.id, "Ombor firmasi yo'q.");
+  // The first line may just name the firm («ostatka SA»); everything else is the list.
+  const namesFirm = firms.some((f) => f.kind === "sklad" && norm(f.name) === norm(first.trim()));
+  const docs = parseSklad((namesFirm ? "" : first + "\n") + more.join("\n"));
+  const items: Record<string, number> = {};
+  for (const d of docs) for (const it of d.items) {
+    const k = canonical(it.sku, firm.skus || {});
+    items[k] = (items[k] || 0) + it.qty;
+  }
+  if (!Object.keys(items).length) return void await send(msg.chat.id, "Ostatkani shunday yozing:\nostatka\n18.10.26\nСа 5л 1000\nСа 2л 300");
+  const date = docs.find((d) => d.date)?.date || tashkentDate(msg.date);
+  await rest("stock_docs?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ id: `${firm.id}-opening`, firm: firm.id, kind: "opening", date, party: "", items: Object.entries(items).map(([sku, qty]) => ({ sku, qty })), source: "telegram", sender: who(msg.from || {}), original: { text: body, at: msg.date * 1000 }, created_at: msg.date * 1000, updated_at: new Date().toISOString() }),
+  });
+  await skladReport(msg.chat.id, ddmm(date));
 }
