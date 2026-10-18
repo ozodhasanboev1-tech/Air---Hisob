@@ -15,6 +15,7 @@
   const LOOKALIKE = { а: 'a', б: 'b', в: 'b', е: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c', т: 't', у: 'y', х: 'x' };
   const norm = (s) => String(s).toLowerCase().replace(/[абвекмнорстух]/g, (c) => LOOKALIKE[c]).replace(/\s+/g, ' ').trim();
 
+  let sklad = []; // warehouse firms (SA): {id, name, skus, docs}
   let allEntries = [], entries = [], firms = [], firm = 'air', priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
   const openDetail = new Set(); // shipments whose item list the user folded away
   const openDays = new Set();
@@ -56,9 +57,10 @@
   async function load(quiet) {
     try {
       const d = await api('load');
-      allEntries = d.entries || []; firms = d.firms || [];
+      allEntries = d.entries || []; firms = d.firms || []; sklad = d.sklad || [];
       $('photoRow').hidden = !d.ocr;
-      if (!firms.some((f) => f.id === firm)) firm = (firms.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;
+      const all = [...firms, ...sklad];
+      if (!all.some((f) => f.id === firm)) firm = (all.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;
       selectFirm(firm, true);
       const t = d.telegram || {};
       setStore('ok', 'Ulangan · ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
@@ -83,6 +85,19 @@
     const changed = id !== firm;
     firm = id;
     try { localStorage.setItem('firm', id); } catch (e) {}
+    const sk = sklad.find((x) => x.id === id);
+    $('skladPane').hidden = !sk;
+    document.querySelector('section.balance:not(.skl)').hidden = !!sk;
+    document.querySelector('.tabs').hidden = !!sk;
+    if (sk) {
+      document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = true; });
+      document.title = sk.name + ' ombori'; $('title').textContent = sk.name + ' ombori';
+      document.querySelector('header .sub').textContent = 'Ombordagi tovar, korobkada';
+      drawFirms(); renderSklad(); return;
+    }
+    document.querySelector('header .sub').textContent = 'Chiqarilgan yuklar va bizning to\'lovlar, dollarda ($)';
+    const curTab = document.querySelector('.tabs button[aria-selected="true"]');
+    document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== (curTab ? curTab.dataset.tab : 'ledger'); });
     const f = firms.find((x) => x.id === id) || { name: 'Air', prices: {} };
     entries = allEntries.filter((e) => (e.firm || 'air') === id);
     priceList = f.prices || {};
@@ -96,10 +111,13 @@
   function firmName() { return (firms.find((x) => x.id === firm) || { name: 'Air' }).name; }
   function drawFirms() {
     const box = $('firmTabs');
-    box.hidden = firms.length < 2;
+    box.hidden = firms.length + sklad.length < 2;
     box.innerHTML = firms.map((f) => {
       let bal = 0; allEntries.forEach((e) => { if ((e.firm || 'air') === f.id) bal += e.kind === 'shipment' ? (e.total || 0) : -(e.amount || 0); });
       return `<button type="button" data-firm="${esc(f.id)}" aria-pressed="${f.id === firm}">${esc(f.name)}<small class="num">${fmt(bal)} $</small></button>`;
+    }).join('') + sklad.map((sk) => {
+      const t = Object.values(stockOf(sk)).reduce((a, r) => a + qLeft(r), 0);
+      return `<button type="button" data-firm="${esc(sk.id)}" aria-pressed="${sk.id === firm}">${esc(sk.name)} ombori<small class="num">${fmt(t)} k</small></button>`;
     }).join('');
   }
   $('firmTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) selectFirm(b.dataset.firm); });
@@ -431,6 +449,69 @@
       clearTimeout(pendingDel[id]); delete pendingDel[id];
       try { b.disabled = true; await removeEntry(id); haptic('success'); } catch (err) { b.disabled = false; b.textContent = 'O\'chmadi'; }
     }
+  });
+
+  // ---------- ombor (SA) ----------
+  // Stock per SKU: opening + prixod + vozvrat − chiqim; moves dated before the opening are already in it.
+  const KIND = { out: ['out', 'CHIQIM'], in: ['in', 'PRIXOD'], return: ['ret', 'VOZVRAT'] };
+  const qLeft = (r) => r.open + r.in + r.ret - r.out;
+  function stockOf(sk, day) {
+    const opening = sk.docs.find((d) => d.kind === 'opening');
+    const rows = {};
+    sk.docs.forEach((d) => {
+      if (d.kind !== 'opening' && opening && d.date < opening.date) return;
+      if (day && d.date !== day) return;
+      (d.items || []).forEach((i) => {
+        const r = rows[i.sku] || (rows[i.sku] = { open: 0, out: 0, in: 0, ret: 0 });
+        r[d.kind === 'opening' ? 'open' : d.kind === 'return' ? 'ret' : d.kind] += Number(i.qty) || 0;
+      });
+    });
+    return rows;
+  }
+  const skPhotos = {};
+  function renderSklad() {
+    const sk = sklad.find((x) => x.id === firm); if (!sk) return;
+    const opening = sk.docs.find((d) => d.kind === 'opening');
+    const rows = stockOf(sk), td = stockOf(sk, today());
+    // Catalogue order by its code (00001 гель 5л first), then anything new.
+    const codeOf = (k) => (sk.skus[k] || {}).code || '99999';
+    const keys = Object.keys(rows).sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
+    const sum = (o, f) => Object.values(o).reduce((a, r) => a + f(r), 0);
+    $('skTotal').textContent = fmt(sum(rows, qLeft));
+    $('skHint').textContent = opening ? 'korobka · ostatka ' + fmtDate(opening.date) + ' dan' : 'ostatka kiritilmagan';
+    $('skOut').textContent = fmt(sum(td, (r) => r.out)); $('skIn').textContent = fmt(sum(td, (r) => r.in)); $('skRet').textContent = fmt(sum(td, (r) => r.ret));
+    $('skOpenHead').textContent = opening ? 'Ostatka ' + opening.date.slice(8) + '.' + opening.date.slice(5, 7) : 'Ostatka';
+    const n = (v) => (v ? fmt(v) : '—');
+    $('skRows').innerHTML = keys.length ? keys.map((k) => {
+      const r = rows[k], q = qLeft(r), code = (sk.skus[k] || {}).code;
+      return `<tr class="${q === 0 ? 'zero' : ''}"><td>${esc(k)}${code ? ` <span class="example">${esc(code)}</span>` : ''}</td><td class="r num q${q < 0 ? ' neg' : ''}">${fmt(q)}</td><td class="r num">${n(r.open)}</td><td class="r num">${n(r.out)}</td><td class="r num">${n(r.in)}</td><td class="r num">${n(r.ret)}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="empty">Hali hech narsa yo\'q</td></tr>';
+
+    const moves = sk.docs.filter((d) => d.kind !== 'opening').slice().reverse();
+    $('skMoves').innerHTML = moves.length ? moves.map((d) => {
+      const [cls, label] = KIND[d.kind] || ['out', d.kind];
+      const o = d.original || {};
+      const t = o.at ? new Date(o.at).toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      const doubts = (d.items || []).filter((i) => i.doubt);
+      const early = opening && d.date < opening.date;
+      const ph = skPhotos[d.id];
+      return `<div class="card">
+        <div class="top"><span class="when num"><span class="tag ${cls}">${label}</span>${fmtDate(d.date)}</span><span class="amt num">${fmt((d.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0))} k</span></div>
+        <div class="desc">${esc(d.kind === 'in' ? 'Prixod' : (d.party || 'mijoz yozilmagan'))}<small>${esc([o.from, t, o.editedAt ? 'o\'zgartirilgan' : ''].filter(Boolean).join(' · '))}</small></div>
+        <ul>${(d.items || []).map((i) => `<li>${esc(i.sku)} — <span class="num">${fmt(i.qty)} k</span>${i.doubt ? ` <span class="warn">⚠️ ${esc(i.doubt)}</span>` : ''}</li>`).join('')}</ul>
+        ${early ? '<span class="warn">Sana ostatkadan oldin, qoldiqqa qo\'shilmagan</span>' : ''}
+        ${doubts.length ? '<span class="warn">Rasmdagi raqamni tekshiring</span>' : ''}
+        ${o.text ? `<details><summary class="example">💬 Asli</summary><div class="orig"><pre>${esc(o.text)}</pre></div></details>` : ''}
+        ${o.photo ? (ph && ph.photo ? `<div class="orig"><a href="${esc(ph.photo)}" target="_blank" rel="noopener"><img src="${esc(ph.photo)}" alt="Asl rasm"></a></div>` : `<div class="acts"><button class="ghost" data-skphoto="${esc(d.id)}">${ph && ph.loading ? 'Yuklanmoqda…' : '📷 Asli'}</button></div>`) : ''}
+      </div>`;
+    }).join('') : '<div class="empty"><b>Hali harakat yo\'q</b>Izzat aka yoki Alisher guruhga chiqim, prixod yoki vozvrat yozsa, shu yerda chiqadi.</div>';
+  }
+  $('skMoves').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[data-skphoto]'); if (!b) return;
+    const id = b.dataset.skphoto;
+    skPhotos[id] = { loading: true }; renderSklad();
+    try { skPhotos[id] = await api('stockPhoto', { id }); } catch (err) { skPhotos[id] = null; b.textContent = err.message || 'Yuklanmadi'; return; }
+    renderSklad();
   });
 
   resetShip(); resetPay(); render(); load();

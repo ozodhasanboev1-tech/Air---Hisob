@@ -70,8 +70,16 @@ Deno.serve(async (req) => {
   try {
     switch (body.action) {
       case "load": {
-        const [entries, firms, telegram] = await Promise.all([listEntries(), listFirms(), getMeta("telegram")]);
-        return json({ entries, firms: firms.map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
+        const [entries, firms, telegram, stock] = await Promise.all([
+          listEntries(), listFirms(), getMeta("telegram"),
+          rest("stock_docs?select=id,firm,kind,date,party,items,sender,original,created_at&order=date.asc,created_at.asc"),
+        ]);
+        // Warehouse firms (SA): stock in boxes, shown in their own tab of the app.
+        const sklad = firms.filter((f) => f.kind === "sklad").map((f) => ({
+          id: f.id, name: f.name, skus: f.skus || {},
+          docs: stock.filter((d: any) => d.firm === f.id).map((d: any) => ({ ...d, createdAt: Number(d.created_at), created_at: undefined })),
+        }));
+        return json({ sklad, entries, firms: firms.filter((f) => f.kind !== "sklad").map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
       }
       case "save": {
         const e = cleanEntry(body.entry, await listFirms());
@@ -122,15 +130,27 @@ Deno.serve(async (req) => {
         if (!o) return json({ error: "none", message: "Bu yukning asl nusxasi saqlanmagan." }, 404);
         return json({ ok: true, text: o.text || "", from: o.from || "", at: o.at || null, editedAt: o.editedAt || null, deletedAt: o.deletedAt || null, history: o.history || [], photo: o.photo ? await photoUrl(o.photo) : null });
       }
+      case "stockPhoto": {
+        if (typeof body.id !== "string" || !body.id) return json({ error: "invalid" }, 400);
+        const [row] = await rest(`stock_docs?id=eq.${encodeURIComponent(body.id)}&select=original`);
+        const path = row?.original?.photo;
+        if (!path) return json({ error: "none", message: "Rasm saqlanmagan." }, 404);
+        return json({ ok: true, photo: await photoUrl(path) });
+      }
       case "ocr": {
-        if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun GEMINI_API_KEY (bepul) qo'yilmagan." }, 400);
+        if (!hasOcrKey()) return json({ error: "ocr", message: "Rasm o'qish uchun ANTHROPIC_API_KEY qo'yilmagan." }, 400);
         const f = (await listFirms()).find((x) => x.id === body.firm);
         if (!f || typeof body.image !== "string" || body.image.length > 7_000_000) {
           return json({ error: "invalid", message: "Rasm juda katta yoki firma topilmadi." }, 400);
         }
         const media = ["image/jpeg", "image/png", "image/webp"].includes(body.mediaType) ? body.mediaType : "image/jpeg";
-        const lists = await readListPhoto(body.image, media, Object.keys(f.prices || {}));
-        return json({ ok: true, lists });
+        try {
+          const lists = await readListPhoto(body.image, media, Object.keys(f.prices || {}));
+          return json({ ok: true, lists });
+        } catch (err) {
+          console.error(err);
+          return json({ error: "ocr", message: `Rasmni o'qib bo'lmadi: ${String(err).slice(0, 200)}` }, 502);
+        }
       }
       default:
         return json({ error: "action" }, 400);

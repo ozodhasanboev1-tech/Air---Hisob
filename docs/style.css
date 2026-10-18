@@ -117,3 +117,9 @@ td.r,th.r{text-align:right}
 .dayphotos{display:flex;gap:6px;overflow-x:auto}
 .dayphotos img{height:120px;border-radius:6px;display:block}
 .dayphotos .ph{height:120px;width:90px;display:grid;place-items:center;background:var(--sunk);border-radius:6px}
+.sklad{display:grid;gap:16px}
+.tag.out{background:var(--debt-soft);color:var(--debt)} .tag.in{background:var(--paid-soft);color:var(--paid)} .tag.ret{background:var(--bank-soft);color:var(--bank)}
+td.neg{color:var(--debt);font-weight:700}
+td.q{font-weight:700}
+tr.zero td{color:var(--muted)}
+.card .warn{color:var(--debt);font-size:12px}

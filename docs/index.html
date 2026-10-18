@@ -26,6 +26,28 @@
 
   <nav class="firms" id="firmTabs" aria-label="Firma" hidden></nav>
 
+  <section class="sklad" id="skladPane" aria-label="Ombor" hidden>
+    <div class="balance skl">
+      <div class="main"><div class="k">Ombordagi qoldiq</div><div class="v num" id="skTotal">0</div><div class="hint" id="skHint">korobka</div></div>
+      <div><div class="k">Bugun chiqim</div><div class="v num" id="skOut">0</div><div class="hint">korobka</div></div>
+      <div><div class="k">Bugun prixod</div><div class="v num" id="skIn">0</div><div class="hint">korobka</div></div>
+      <div><div class="k">Bugun vozvrat</div><div class="v num" id="skRet">0</div><div class="hint">korobka</div></div>
+    </div>
+    <div class="panel">
+      <h2>Qoldiq, korobka</h2>
+      <div class="tblwrap">
+        <table>
+          <thead><tr><th>Tovar</th><th class="r">Qoldiq</th><th class="r" id="skOpenHead">Ostatka</th><th class="r">Chiqim</th><th class="r">Prixod</th><th class="r">Vozvrat</th></tr></thead>
+          <tbody id="skRows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ledger-head"><h2>Harakatlar</h2></div>
+      <div id="skMoves" class="cards"></div>
+    </div>
+  </section>
+
   <section class="balance" aria-label="Umumiy holat">
     <div class="main">
       <div class="k" id="balLabel">Air'ga qarzimiz</div>

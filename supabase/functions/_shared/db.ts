@@ -176,6 +176,8 @@ export type Firm = {
   prices: Record<string, number>;
   discount_pct: number;
   sort: number;
+  kind?: "ledger" | "sklad";
+  skus?: Record<string, { code?: string; aliases?: string[] }>;
 };
 
 export async function listFirms(): Promise<Firm[]> {
