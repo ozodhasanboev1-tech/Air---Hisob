@@ -125,6 +125,7 @@ async function onAddedToGroup(m: any) {
   const joined = (was === "left" || was === "kicked") && (now === "member" || now === "administrator");
   if (!isGroup || !joined) return;
   const firm = await firmByChat(m.chat.id);
+  if (!firm) await setMeta(`joined:${m.chat.id}`, { title: m.chat.title ?? null, at: new Date().toISOString(), by: m.from?.id ?? null });
   await send(m.chat.id, firm
     ? `Salom! Bu guruh «${firm.name}» hisobiga ulangan.`
     : "Salom! Bu guruh qaysi firmaniki? Ozodbek, guruhda «/firma Nomi» deb yozing (masalan «/firma Timson»).");
