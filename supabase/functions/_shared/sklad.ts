@@ -16,7 +16,8 @@ export const KIND_LABEL: Record<SkladKind | "opening", string> = {
   out: "Chiqim", in: "Prixod", return: "Vozvrat", opening: "Ostatka",
 };
 
-const DATE_LINE = /^\s*(\d{1,2})[./,](\d{1,2})[./,](\d{2,4})\s*(?:й\.?|y\.?|yil)?\s*$/i;
+// Spaces around the separators happen too: «19.  10.26».
+const DATE_LINE = /^\s*(\d{1,2})\s*[./,]\s*(\d{1,2})\s*[./,]\s*(\d{2,4})\s*(?:й\.?|y\.?|yil)?\s*$/i;
 const IN_RE = /^(prix|прих|приx|kirim|кирим|kelgan|келган)/i;
 const RET_RE = /^(vozv|возв|vazv|qaytd|qaytar|қайт|кайт)/i;
 // Brand prefix: Cyrillic «Са», Latin «SA», or a Latin «C» standing in for «С».
