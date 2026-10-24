@@ -111,6 +111,13 @@ async function handle(update: any) {
     if (isPrivate) return void await send(chat.id, "Tushunmadim.\n\n" + HELP);
   }
 
+  // Someone else writes to the bot (to get view access to the app): the owner gets their id.
+  if (isPrivate && !OWNER_IDS.includes(from.id)) {
+    if (!/^\/start/i.test(text)) return;
+    await send(chat.id, "Assalomu alaykum! So'rovingiz egasiga yuborildi. Ruxsat berilgach, «Hisob» tugmasi orqali hisobotni ko'rasiz.");
+    return void await notifyOwners(`👤 Botga ${who(from)}${from.username ? " (@" + from.username + ")" : ""} yozdi. Telegram ID: ${from.id}\nUnga hisobotni ko'rishga ruxsat berish uchun shu ID ni Claude'ga yuboring.`);
+  }
+
   if (isGroup && firm) await shipment(msg, text, firm, !!update.edited_message);
 }
 
