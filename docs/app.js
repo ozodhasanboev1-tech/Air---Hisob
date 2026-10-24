@@ -485,7 +485,8 @@
     const rows = stockOf(sk), td = stockOf(sk, today());
     // Catalogue order by its code (00001 гель 5л first), then anything new.
     const codeOf = (k) => (sk.skus[k] || {}).code || '99999';
-    const keys = Object.keys(rows).sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
+    // Products with nothing left are not listed (owner, 24.10).
+    const keys = Object.keys(rows).filter((k) => qLeft(rows[k]) !== 0).sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
     const sum = (o, f) => Object.values(o).reduce((a, r) => a + f(r), 0);
     $('skTotal').textContent = fmt(sum(rows, qLeft));
     $('skHint').textContent = opening ? 'korobka · ostatka ' + fmtDate(opening.date) + ' dan' : 'ostatka kiritilmagan';
