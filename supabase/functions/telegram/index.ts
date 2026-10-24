@@ -822,7 +822,8 @@ async function skladReport(chatId: number, rest_: string) {
   const stock = stockOf(rows);
   // Catalogue order by code (as in the owner's stock list), then anything new.
   const codeOf = (k: string) => firm.skus?.[k]?.code || "99999";
-  const skus = Object.keys(stock).sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
+  // Products with nothing left are not listed (owner, 24.10).
+  const skus = Object.keys(stock).filter((k) => stock[k] !== 0).sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
   const dayRows = rows.filter((r) => r.date === date && r.kind !== "opening");
   const sum = (kind: string) => itemsText(Object.entries(stockOf(dayRows.filter((r) => r.kind === kind).map((r) => ({ kind: "in", items: r.items })))).map(([sku, qty]) => ({ sku, qty }))) || "—";
   const out = [
