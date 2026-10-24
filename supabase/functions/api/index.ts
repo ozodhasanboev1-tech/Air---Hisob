@@ -1,5 +1,7 @@
 // Backend for the Mini App. Every request carries Telegram's signed initData in the
 // X-Telegram-Init-Data header; only users listed in OWNER_IDS may read or change the ledger.
+// Viewers (meta key "viewers": {"<telegram id>": {name, firms: ["sa", …] or "*"}}) may only look,
+// and only at the firms listed for them.
 
 import {
   deleteEntry, Entry, Firm, getMeta, listEntries, listFirms, photoUrl, rest, rowToEntry, shipmentTotals, updateFirm, upsertEntry,
@@ -8,6 +10,7 @@ import { verifyInitData } from "../_shared/telegram.ts";
 import { hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
 import { norm } from "../_shared/parse.ts";
 
+const VIEW_ACTIONS = ["load", "original", "stockPhoto"];
 const OWNER_IDS = (Deno.env.get("OWNER_IDS") || "6158024788").split(",").map((s) => Number(s.trim()));
 
 const CORS = {
@@ -64,22 +67,29 @@ Deno.serve(async (req) => {
 
   const user = await verifyInitData(req.headers.get("X-Telegram-Init-Data") || "");
   if (!user) return json({ error: "auth", message: "Ilovani Telegram ichidan oching." }, 401);
-  if (!OWNER_IDS.includes(user.id)) return json({ error: "forbidden", message: "Sizga ruxsat berilmagan." }, 403);
+  const owner = OWNER_IDS.includes(user.id);
+  const viewer = owner ? null : ((await getMeta("viewers")) || {})[String(user.id)];
+  if (!owner && !viewer) return json({ error: "forbidden", message: `Sizga ruxsat berilmagan. Telegram ID: ${user.id}` }, 403);
+  const sees = (firmId: string) => owner || viewer.firms === "*" || (viewer.firms || []).includes(firmId);
 
   const body = await req.json().catch(() => ({}));
+  if (!owner && !VIEW_ACTIONS.includes(body.action)) return json({ error: "forbidden", message: "Sizda faqat ko'rish huquqi bor." }, 403);
   try {
     switch (body.action) {
       case "load": {
-        const [entries, firms, telegram, stock] = await Promise.all([
+        const [allEntries, allFirms, telegram, allStock] = await Promise.all([
           listEntries(), listFirms(), getMeta("telegram"),
           rest("stock_docs?select=id,firm,kind,date,party,items,sender,original,created_at&order=date.asc,created_at.asc"),
         ]);
+        const firms = allFirms.filter((f) => sees(f.id));
+        const entries = allEntries.filter((e) => sees(e.firm || "air"));
+        const stock = allStock.filter((d: any) => sees(d.firm));
         // Warehouse firms (SA): stock in boxes, shown in their own tab of the app.
         const sklad = firms.filter((f) => f.kind === "sklad").map((f) => ({
           id: f.id, name: f.name, skus: f.skus || {},
           docs: stock.filter((d: any) => d.firm === f.id).map((d: any) => ({ ...d, createdAt: Number(d.created_at), created_at: undefined })),
         }));
-        return json({ sklad, entries, firms: firms.filter((f) => f.kind !== "sklad").map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name } });
+        return json({ sklad, entries, firms: firms.filter((f) => f.kind !== "sklad").map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name, role: owner ? "owner" : "viewer" } });
       }
       case "save": {
         const e = cleanEntry(body.entry, await listFirms());
@@ -126,14 +136,14 @@ Deno.serve(async (req) => {
         // The Telegram post a shipment came from: its text and/or a short-lived link to the photo.
         if (typeof body.id !== "string" || !body.id) return json({ error: "invalid" }, 400);
         const [row] = await rest(`entries?id=eq.${encodeURIComponent(body.id)}&select=*`);
-        const o = row && rowToEntry(row).original;
+        const o = row && sees(row.firm || "air") && rowToEntry(row).original;
         if (!o) return json({ error: "none", message: "Bu yukning asl nusxasi saqlanmagan." }, 404);
         return json({ ok: true, text: o.text || "", from: o.from || "", at: o.at || null, editedAt: o.editedAt || null, deletedAt: o.deletedAt || null, history: o.history || [], photo: o.photo ? await photoUrl(o.photo) : null });
       }
       case "stockPhoto": {
         if (typeof body.id !== "string" || !body.id) return json({ error: "invalid" }, 400);
-        const [row] = await rest(`stock_docs?id=eq.${encodeURIComponent(body.id)}&select=original`);
-        const path = row?.original?.photo;
+        const [row] = await rest(`stock_docs?id=eq.${encodeURIComponent(body.id)}&select=firm,original`);
+        const path = row && sees(row.firm) && row.original?.photo;
         if (!path) return json({ error: "none", message: "Rasm saqlanmagan." }, 404);
         return json({ ok: true, photo: await photoUrl(path) });
       }

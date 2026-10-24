@@ -58,6 +58,10 @@
     try {
       const d = await api('load');
       allEntries = d.entries || []; firms = d.firms || []; sklad = d.sklad || [];
+      // A viewer only looks: the server refuses changes, and the buttons for them are hidden.
+      const viewOnly = (d.user || {}).role === 'viewer';
+      document.body.classList.toggle('viewonly', viewOnly);
+      if (viewOnly && ['ship', 'pay'].includes((document.querySelector('.tabs button[aria-selected="true"]') || {}).dataset?.tab)) showTab('ledger');
       $('photoRow').hidden = !d.ocr;
       const all = [...firms, ...sklad];
       if (!all.some((f) => f.id === firm)) firm = (all.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;

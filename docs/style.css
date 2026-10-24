@@ -123,3 +123,6 @@ td.neg{color:var(--debt);font-weight:700}
 td.q{font-weight:700}
 tr.zero td{color:var(--muted)}
 .card .warn{color:var(--debt);font-size:12px}
+
+/* Read-only viewers: nothing to add, edit or delete. */
+.viewonly .tabs [data-tab="ship"], .viewonly .tabs [data-tab="pay"], .viewonly [data-act="edit"], .viewonly [data-act="del"], .viewonly .ownonly { display: none; }
