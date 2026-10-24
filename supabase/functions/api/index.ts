@@ -106,19 +106,28 @@ Deno.serve(async (req) => {
         const items: Record<string, number> = {};
         for (const [k, v] of Object.entries(body.items || {})) {
           const name = String(k).toLowerCase().replace(/\s+/g, " ").trim().slice(0, 100);
-          if (name && num(v) > 0) items[name] = num(v);
+          if (name) items[name] = Math.max(0, num(v)); // 0 = product known, price not set yet
         }
         if (typeof body.firm !== "string" || !(await listFirms()).some((f) => f.id === body.firm)) {
           return json({ error: "invalid", message: "Firma topilmadi." }, 400);
         }
         await updateFirm(body.firm, { prices: items });
-        // Fill in shipments that were recorded before the product had a price.
+        // Renamed products take the new name in old shipments too; then fill in shipments that were
+        // recorded before the product had a price.
+        const renames: Record<string, string> = {};
+        for (const [from, to] of Object.entries(body.renames || {})) {
+          const t = String(to).replace(/\s+/g, " ").trim().slice(0, 100);
+          if (t && norm(from) !== norm(t)) renames[norm(from)] = t;
+        }
         const map: Record<string, number> = {};
         for (const [k, v] of Object.entries(items)) map[norm(k)] = v;
         let filled = 0;
         for (const e of await listEntries(body.firm)) {
-          if (e.kind !== "shipment" || !(e.items || []).some((i) => !i.price && map[norm(i.name)])) continue;
-          const its = e.items!.map((i) => (i.price ? i : { ...i, price: map[norm(i.name)] || 0 }));
+          if (e.kind !== "shipment") continue;
+          const renamed = (e.items || []).map((i) => (renames[norm(i.name)] ? { ...i, name: renames[norm(i.name)] } : i));
+          const changed = renamed.some((i, n) => i !== e.items![n]);
+          if (!changed && !renamed.some((i) => !i.price && map[norm(i.name)])) continue;
+          const its = renamed.map((i) => (i.price ? i : { ...i, price: map[norm(i.name)] || 0 }));
           await upsertEntry({ ...e, items: its, ...shipmentTotals(its, e.discountPct || 0) });
           filled++;
         }

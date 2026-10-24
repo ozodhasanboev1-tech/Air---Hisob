@@ -145,7 +145,7 @@
   let priceDraft = [];
   function drawPrices() {
     $('discInput').value = firmDiscount() || '';
-    priceDraft = Object.keys(priceList).sort().map((k) => ({ name: k, price: priceList[k] }));
+    priceDraft = Object.keys(priceList).sort().map((k) => ({ name: k, price: priceList[k], orig: k }));
     paintPrices();
   }
   function paintPrices() {
@@ -153,14 +153,20 @@
       <td><input data-pi="${i}" data-f="name" value="${esc(p.name)}" aria-label="Tovar nomi"></td>
       <td class="r"><input class="n num" data-pi="${i}" data-f="price" inputmode="decimal" value="${p.price || ''}" aria-label="Narx"></td>
       <td><button type="button" class="ghost danger" data-pdel="${i}" aria-label="O'chirish">×</button></td></tr>`).join('')
-      : '<tr><td colspan="3" class="empty">Narx kiritilmagan</td></tr>';
+      : '<tr><td colspan="3" class="empty">Tovar kiritilmagan</td></tr>';
   }
   $('priceRows').addEventListener('input', (e) => { const i = e.target.dataset.pi; if (i == null) return; priceDraft[i][e.target.dataset.f] = e.target.dataset.f === 'name' ? e.target.value : parseNum(e.target.value); });
   $('priceRows').addEventListener('click', (e) => { const d = e.target.dataset.pdel; if (d != null) { priceDraft.splice(+d, 1); paintPrices(); } });
   $('addPrice').onclick = () => { priceDraft.push({ name: '', price: 0 }); paintPrices(); };
   $('savePrices').onclick = async () => {
-    const out = {}; priceDraft.forEach((p) => { if (norm(p.name) && p.price > 0) out[norm(p.name)] = p.price; });
-    try { const r = await api('prices', { firm, items: out }); priceList = r.items; const f = firms.find((x) => x.id === firm); if (f) f.prices = r.items; drawPrices(); msg('priceMsg', 'Saqlandi' + (r.filled ? ', ' + r.filled + ' ta eski yukka narx qo\'yildi' : '')); haptic('success'); if (r.filled) load(true); }
+    // A product may be saved without a price yet; a renamed one is renamed in the old shipments too.
+    const out = {}, renames = {};
+    priceDraft.forEach((p) => {
+      const k = norm(p.name); if (!k) return;
+      out[k] = p.price > 0 ? p.price : 0;
+      if (p.orig && norm(p.orig) !== k) renames[p.orig] = p.name.trim();
+    });
+    try { const r = await api('prices', { firm, items: out, renames }); priceList = r.items; const f = firms.find((x) => x.id === firm); if (f) f.prices = r.items; drawPrices(); msg('priceMsg', 'Saqlandi' + (r.filled ? ', ' + r.filled + ' ta eski yukka narx qo\'yildi' : '')); haptic('success'); if (r.filled) load(true); }
     catch (err) { msg('priceMsg', err.message, true); haptic('error'); }
   };
 
