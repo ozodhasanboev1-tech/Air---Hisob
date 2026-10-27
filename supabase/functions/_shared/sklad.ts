@@ -40,7 +40,8 @@ export function skuKey(raw: string): string {
   let t = raw.toLowerCase().replace(BRAND_RE, "").replace(/,/g, ".").replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "");
   if (!t) return DEFAULT_SKU;
   if (/^(спр|spr|сpr)/.test(t)) return "спрей";
-  const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:л|l|литр|litr)?\.?\s*(.*)$/);
+  // «5 lt», «5 ltr», «5 литр» are litres too (Alisher, 27.10).
+  const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:литр\w*|litr\w*|ltr|lt|л|l)?\.?\s*(.*)$/);
   if (!m) return t;
   const tail = m[2].replace(/[.\s]/g, "").replace(/k/g, "к").replace(/n/g, "н");
   return `${m[1]}л${tail ? " " + tail : ""}`;
