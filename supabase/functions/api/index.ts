@@ -149,6 +149,48 @@ Deno.serve(async (req) => {
         if (!o) return json({ error: "none", message: "Bu yukning asl nusxasi saqlanmagan." }, 404);
         return json({ ok: true, text: o.text || "", from: o.from || "", at: o.at || null, editedAt: o.editedAt || null, deletedAt: o.deletedAt || null, history: o.history || [], photo: o.photo ? await photoUrl(o.photo) : null });
       }
+      case "stockSave": {
+        // A warehouse move (or the opening stock) added or corrected by hand in the app.
+        const d = body.doc || {};
+        const f = (await listFirms()).find((x) => x.id === d.firm && x.kind === "sklad");
+        if (!f) return json({ error: "invalid", message: "Ombor topilmadi." }, 400);
+        if (!["out", "in", "return", "opening"].includes(d.kind)) return json({ error: "invalid", message: "Harakat turi noto'g'ri." }, 400);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d.date || ""))) return json({ error: "invalid", message: "Sana noto'g'ri." }, 400);
+        const items = (Array.isArray(d.items) ? d.items : [])
+          .map((i: any) => ({ sku: String(i.sku || "").replace(/\s+/g, " ").trim().slice(0, 100), qty: Math.round(num(i.qty)) }))
+          .filter((i: any) => i.sku && i.qty > 0);
+        if (!items.length) return json({ error: "invalid", message: "Kamida bitta tovar va sonini kiriting." }, 400);
+        const party = String(d.party || "").trim().slice(0, 200);
+        const now = Date.now();
+        if (d.id) {
+          const [old] = await rest(`stock_docs?id=eq.${encodeURIComponent(d.id)}&firm=eq.${encodeURIComponent(f.id)}&select=*`);
+          if (!old) return json({ error: "invalid", message: "Harakat topilmadi." }, 404);
+          if ((old.kind === "opening") !== (d.kind === "opening")) return json({ error: "invalid", message: "Ostatkani boshqa harakatga aylantirib bo'lmaydi." }, 400);
+          // The previous version is kept, so a wrong correction can be traced back.
+          const original = { ...(old.original || {}), editedInAppAt: now,
+            appHistory: [...((old.original || {}).appHistory || []), { at: now, kind: old.kind, date: old.date, party: old.party, items: old.items }].slice(-20) };
+          await rest(`stock_docs?id=eq.${encodeURIComponent(d.id)}`, {
+            method: "PATCH", headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({ kind: d.kind, date: d.date, party, items, original, updated_at: new Date().toISOString() }),
+          });
+          return json({ ok: true, id: d.id });
+        }
+        if (d.kind === "opening") return json({ error: "invalid", message: "Ostatka allaqachon bor, uni tahrirlang." }, 400);
+        const id = `app-${now.toString(36)}`;
+        await rest("stock_docs", {
+          method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ id, firm: f.id, kind: d.kind, date: d.date, party, items, source: "app", sender: user.first_name || "", original: { from: user.first_name || "", at: now }, created_at: now, updated_at: new Date().toISOString() }),
+        });
+        return json({ ok: true, id });
+      }
+      case "stockDelete": {
+        if (typeof body.id !== "string" || !body.id) return json({ error: "invalid" }, 400);
+        const [row] = await rest(`stock_docs?id=eq.${encodeURIComponent(body.id)}&select=kind`);
+        if (!row) return json({ error: "invalid", message: "Harakat topilmadi." }, 404);
+        if (row.kind === "opening") return json({ error: "invalid", message: "Ostatkani o'chirib bo'lmaydi, uni tahrirlang." }, 400);
+        await rest(`stock_docs?id=eq.${encodeURIComponent(body.id)}`, { method: "DELETE" });
+        return json({ ok: true });
+      }
       case "stockPhoto": {
         if (typeof body.id !== "string" || !body.id) return json({ error: "invalid" }, 400);
         const [row] = await rest(`stock_docs?id=eq.${encodeURIComponent(body.id)}&select=firm,original`);

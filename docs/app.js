@@ -514,10 +514,81 @@
         ${doubts.length ? '<span class="warn">Rasmdagi raqamni tekshiring</span>' : ''}
         ${o.text ? `<details><summary class="example">💬 Asli</summary><div class="orig"><pre>${esc(o.text)}</pre></div></details>` : ''}
         ${o.photo ? (ph && ph.photo ? `<div class="orig"><a href="${esc(ph.photo)}" target="_blank" rel="noopener"><img src="${esc(ph.photo)}" alt="Asl rasm"></a></div>` : `<div class="acts"><button class="ghost" data-skphoto="${esc(d.id)}">${ph && ph.loading ? 'Yuklanmoqda…' : '📷 Asli'}</button></div>`) : ''}
+        <div class="acts"><button class="ghost" data-act="edit" data-skedit="${esc(d.id)}">Tahrirlash</button><button class="ghost danger" data-act="del" data-skdel="${esc(d.id)}">${skDelAsk === d.id ? 'Rostdan o\'chirilsinmi?' : 'O\'chirish'}</button></div>
       </div>`;
     }).join('') : '<div class="empty"><b>Hali harakat yo\'q</b>Izzat aka yoki Alisher guruhga chiqim, prixod yoki vozvrat yozsa, shu yerda chiqadi.</div>';
+    // The move being edited (or a new one, or the opening stock) is shown as a form on top.
+    if (skDraft) $('skMoves').insertAdjacentHTML('afterbegin', skFormHtml(sk));
   }
+
+  // ---------- editing warehouse moves by hand ----------
+  let skDraft = null, skDelAsk = null;
+  const KIND_OPTS = [['out', 'Chiqim'], ['in', 'Prixod'], ['return', 'Vozvrat']];
+  function skEditStart(sk, doc) {
+    skDraft = doc
+      ? { id: doc.id, kind: doc.kind, date: doc.date, party: doc.party || '', items: (doc.items || []).map((i) => ({ sku: i.sku, qty: i.qty })) }
+      : { id: null, kind: 'out', date: today(), party: '', items: [{ sku: Object.keys(sk.skus)[0] || '', qty: 0 }] };
+    skDelAsk = null; renderSklad();
+    const f = $('skForm'); if (f) f.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  function skFormHtml(sk) {
+    const d = skDraft, opening = d.kind === 'opening';
+    const codeOf = (k) => (sk.skus[k] || {}).code || '99999';
+    const names = [...new Set([...Object.keys(sk.skus), ...d.items.map((i) => i.sku).filter(Boolean)])].sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
+    return `<form class="card skform" id="skForm">
+      <div class="editing"><span>${opening ? 'Ostatka' : d.id ? 'Harakatni tahrirlash' : 'Yangi harakat'}</span><button type="button" class="ghost" data-skf="cancel">Bekor qilish</button></div>
+      <div class="row">
+        ${opening ? '' : `<label style="flex:1 1 120px">Turi<select data-skf="kind">${KIND_OPTS.map(([v, l]) => `<option value="${v}"${d.kind === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`}
+        <label style="flex:1 1 140px">Sana<input type="date" data-skf="date" value="${esc(d.date)}"></label>
+        ${opening ? '' : `<label style="flex:2 1 180px">Mijoz / kimdan<input data-skf="party" value="${esc(d.party)}" placeholder="masalan, Абдулло"></label>`}
+      </div>
+      <div class="tblwrap"><table class="items"><thead><tr><th>Tovar</th><th class="r">Korobka</th><th></th></tr></thead><tbody>
+        ${d.items.map((i, n) => `<tr><td><select data-ski="${n}" data-f="sku">${names.map((k) => `<option${k === i.sku ? ' selected' : ''}>${esc(k)}</option>`).join('')}</select></td>
+          <td class="r"><input class="n num" inputmode="numeric" data-ski="${n}" data-f="qty" value="${i.qty || ''}"></td>
+          <td><button type="button" class="ghost danger" data-skidel="${n}" aria-label="O'chirish">×</button></td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="row" style="justify-content:space-between"><button type="button" class="ghost" data-skf="addrow">+ Tovar</button><span class="msg" id="skMsg"></span><button type="submit" class="primary" style="flex:0 0 auto">Saqlash</button></div>
+    </form>`;
+  }
+  $('skAdd').onclick = () => { const sk = sklad.find((x) => x.id === firm); if (sk) skEditStart(sk, null); };
+  $('skEditOpen').onclick = () => {
+    const sk = sklad.find((x) => x.id === firm); if (!sk) return;
+    const op = sk.docs.find((d) => d.kind === 'opening');
+    if (op) skEditStart(sk, op);
+  };
+  $('skMoves').addEventListener('input', (e) => {
+    if (!skDraft) return;
+    const t = e.target;
+    if (t.dataset.skf && ['kind', 'date', 'party'].includes(t.dataset.skf)) skDraft[t.dataset.skf] = t.value;
+    if (t.dataset.ski != null) skDraft.items[+t.dataset.ski][t.dataset.f] = t.dataset.f === 'qty' ? parseNum(t.value) : t.value;
+  });
+  $('skMoves').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!skDraft) return;
+    const btn = e.submitter; if (btn) btn.disabled = true;
+    try {
+      await api('stockSave', { doc: Object.assign({ firm }, skDraft) });
+      skDraft = null; haptic('success'); await load(true);
+    } catch (err) { msg('skMsg', err.message, true); haptic('error'); }
+    finally { if (btn) btn.disabled = false; }
+  });
+
   $('skMoves').addEventListener('click', async (ev) => {
+    const sk = sklad.find((x) => x.id === firm);
+    const c = ev.target.closest('button[data-skf],button[data-skidel],button[data-skedit],button[data-skdel]');
+    if (c && sk) {
+      if (c.dataset.skf === 'cancel') { skDraft = null; renderSklad(); }
+      else if (c.dataset.skf === 'addrow') { skDraft.items.push({ sku: Object.keys(sk.skus)[0] || '', qty: 0 }); renderSklad(); }
+      else if (c.dataset.skidel != null) { skDraft.items.splice(+c.dataset.skidel, 1); renderSklad(); }
+      else if (c.dataset.skedit) skEditStart(sk, sk.docs.find((d) => d.id === c.dataset.skedit));
+      else if (c.dataset.skdel) {
+        const id = c.dataset.skdel;
+        if (skDelAsk !== id) { skDelAsk = id; renderSklad(); return; }
+        skDelAsk = null;
+        try { await api('stockDelete', { id }); haptic('success'); await load(true); } catch (err) { alert(err.message); }
+      }
+      return;
+    }
     const b = ev.target.closest('button[data-skphoto]'); if (!b) return;
     const id = b.dataset.skphoto;
     skPhotos[id] = { loading: true }; renderSklad();
@@ -527,6 +598,7 @@
 
   resetShip(); resetPay(); render(); load();
   // Refresh when the app comes back to the foreground and every 30 s, so the bot's new posts show up.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(true); });
-  setInterval(() => { if (!document.hidden) load(true); }, 30000);
+  // Not while a warehouse move is being edited: redrawing would drop the field being typed in.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !skDraft) load(true); });
+  setInterval(() => { if (!document.hidden && !skDraft) load(true); }, 30000);
 })();
