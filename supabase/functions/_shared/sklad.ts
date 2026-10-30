@@ -18,6 +18,7 @@ export const KIND_LABEL: Record<SkladKind | "opening", string> = {
 
 // Spaces around the separators happen too: «19.  10.26».
 const DATE_LINE = /^\s*(\d{1,2})\s*[./,]\s*(\d{1,2})\s*[./,]\s*(\d{2,4})\s*(?:й\.?|y\.?|yil)?\s*$/i;
+const DATE_THEN_NAME = /^\s*(\d{1,2}\s*[./,]\s*\d{1,2}\s*[./,]\s*\d{2,4})\s*(?:й\.?|y\.?|yil)?\s+(\p{L}.*)$/iu;
 const IN_RE = /^(prix|прих|приx|kirim|кирим|kelgan|келган)/i;
 const RET_RE = /^(vozv|возв|vazv|qaytd|qaytar|қайт|кайт)/i;
 // Brand prefix: Cyrillic «Са», Latin «SA», or a Latin «C» standing in for «С».
@@ -43,7 +44,9 @@ export function skuKey(raw: string): string {
   // «5 lt», «5 ltr», «5 литр» are litres too (Alisher, 27.10).
   const m = t.match(/^(\d+(?:\.\d+)?)\s*(?:литр\w*|litr\w*|ltr|lt|л|l)?\.?\s*(.*)$/);
   if (!m) return t;
-  const tail = m[2].replace(/[.\s]/g, "").replace(/k/g, "к").replace(/n/g, "н");
+  // «3л k/n» is кондиционер «3л к/н»; any other tail («kanditsaner») is kept as written.
+  const rest = m[2].replace(/[.\s]/g, "");
+  const tail = /^[kк]\/?[nн]$/i.test(rest) ? "к/н" : rest;
   return `${m[1]}л${tail ? " " + tail : ""}`;
 }
 
@@ -51,7 +54,8 @@ type Line = { sku: string; qty: number } | null;
 
 // An item line: optional brand + SKU, then the box count; a bare count means 5л.
 export function parseItemLine(line: string): Line {
-  const s = line.trim();
+  // A note in brackets after the count is dropped: «Sa 5 lt 150 ( tojik)».
+  const s = line.replace(/\([^)]*\)\s*$/, "").trim();
   const m = s.match(QTY_TAIL);
   if (!m) return null;
   const prefix = m[1].trim();
@@ -76,6 +80,14 @@ export function parseSklad(text: string): SkladDoc[] {
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
+    // «28.10.26 Alisher»: the date and who it is for on one line.
+    const dn = line.match(DATE_THEN_NAME);
+    if (dn && parseDateLine(dn[1])) {
+      if (cur?.items.length) docs.push(cur);
+      date = parseDateLine(dn[1]);
+      cur = { kind: "out", date, party: dn[2].trim(), items: [] };
+      continue;
+    }
     const d = parseDateLine(line);
     if (d) {
       if (cur?.items.length) { docs.push(cur); cur = null; }
