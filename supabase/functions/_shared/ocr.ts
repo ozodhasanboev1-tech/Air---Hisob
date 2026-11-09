@@ -71,10 +71,30 @@ function knownText(knownNames: string[], extra = "") {
 // `extra` adds firm-specific layout notes to the prompt (e.g. the SA warehouse notebook).
 export async function readListPhoto(base64: string, mediaType: string, knownNames: string[], extra = ""): Promise<PhotoList[]> {
   if (!Deno.env.get("ANTHROPIC_API_KEY")) return mergeReads([cleanLists(await readWithGemini(base64, mediaType, knownNames, extra))]);
-  const read = () => readWithClaude(base64, mediaType, knownNames, extra).then(cleanLists);
-  const reads = await Promise.all([read(), read()]);
-  if (!sameReads(reads[0], reads[1])) reads.push(await read());
+  // Each read gets one more try after a short pause (the API is sometimes busy or rate-limited when
+  // several photos arrive together); one failed read no longer sinks the whole photo.
+  const once = () => readWithClaude(base64, mediaType, knownNames, extra).then(cleanLists);
+  const read = () => once().catch(async (err) => {
+    console.error("ocr read", ocrErrorText(err));
+    await new Promise((r) => setTimeout(r, 5000));
+    return once();
+  });
+  const settled = await Promise.allSettled([read(), read()]);
+  const reads = settled.filter((s) => s.status === "fulfilled").map((s) => (s as PromiseFulfilledResult<PhotoList[]>).value);
+  if (!reads.length) throw (settled[0] as PromiseRejectedResult).reason;
+  if (reads.length === 1 || !sameReads(reads[0], reads[1])) {
+    const third = await read().catch((err) => (console.error("ocr read", ocrErrorText(err)), null));
+    if (third) reads.push(third);
+  }
   return mergeReads(reads);
+}
+
+// A short, readable reason for a failed read (API status and message), kept with the unread photo.
+export function ocrErrorText(err: unknown): string {
+  const e = err as any;
+  const status = e?.status ? `${e.status} ` : "";
+  const msg = e?.error?.error?.message || e?.message || String(err);
+  return `${status}${msg}`.replace(/\s+/g, " ").slice(0, 200);
 }
 
 const key = (s: string) => s.toLowerCase().replace(/[\s.-]/g, "");
