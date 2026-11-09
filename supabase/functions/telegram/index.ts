@@ -11,7 +11,7 @@ import {
   setMeta, shipmentTotals, storePhoto, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
 } from "../_shared/db.ts";
 import { downloadFile, send, tg } from "../_shared/telegram.ts";
-import { bytesToBase64, hasOcrKey, readListPhoto } from "../_shared/ocr.ts";
+import { bytesToBase64, hasOcrKey, ocrErrorText, readListPhoto } from "../_shared/ocr.ts";
 import { canonical, itemsText, KIND_LABEL, parseSklad, SkladDoc, skuKey, stockOf } from "../_shared/sklad.ts";
 import { BALANCE_RE, CANCEL_RE, norm, parseCancel, parsePayment, parseShipments, Payment } from "../_shared/parse.ts";
 
@@ -510,7 +510,37 @@ async function readPhoto(msg: any, firm: Firm) {
     });
     return void await notifyOwners(`📷 «${firm.name}»: ${sender} ${when(msg.date)} dagi rasm saqlandi. Claude uni o'qib, ro'yxatni kiritadi va shu yerga yozadi.`);
   }
-  await ocrPhoto(firm, docId(msg.chat.id, msg.message_id), msg.date, sender, original, bytes, mediaType, false);
+  const base = docId(msg.chat.id, msg.message_id);
+  // Saved as unread first, so a photo is never lost if the function is stopped mid-read: the hourly
+  // job then picks it up like any other unread photo.
+  await upsertEntry({
+    id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(msg.date), note: "📷 o'qilmagan rasm",
+    items: [], total: 0, gross: 0, discountPct: Number(firm.discount_pct) || 0,
+    createdAt: msg.date * 1000, source: "telegram", sender, original,
+  });
+  await oneAtATime(() => ocrPhoto(firm, base, msg.date, sender, original, bytes, mediaType, false));
+}
+
+// Photos posted together are read one after another, not all at once: several photos at the same
+// moment meant 4 to 6 parallel reads, and the API turned some of them away. A photo waits up to
+// OCR_WAIT for the one before it; the lock expires by itself if a run is stopped while holding it.
+const OCR_WAIT = 60_000;
+const OCR_LOCK = 150_000;
+async function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
+  const me = crypto.randomUUID();
+  const started = Date.now();
+  for (;;) {
+    const lock = await getMeta("ocrLock").catch(() => ({}));
+    if (!lock?.until || lock.until < Date.now() || Date.now() - started > OCR_WAIT) break;
+    await new Promise((r) => setTimeout(r, 3000 + Math.random() * 2000));
+  }
+  await setMeta("ocrLock", { by: me, until: Date.now() + OCR_LOCK }).catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    const lock = await getMeta("ocrLock").catch(() => ({}));
+    if (lock?.by === me) await setMeta("ocrLock", { until: 0 }).catch(() => {});
+  }
 }
 
 // The bot reads photos itself only with Claude (ANTHROPIC_API_KEY): Gemini was switched off at the
@@ -533,10 +563,12 @@ async function ocrPhoto(
   const unread = async (why: string) => {
     if (!(await stillUnread())) return;
     const tries = (original.ocrTries || 0) + 1;
+    // The last reason is kept on the photo (original.ocrError) so a failure can be looked up later.
     await upsertEntry({
       id: `${base}-1`, firm: firm.id, kind: "shipment", date: tashkentDate(unixDate), note: "📷 o'qilmagan rasm",
       items: [], total: 0, gross: 0, discountPct: Number(firm.discount_pct) || 0,
-      createdAt: unixDate * 1000, source: "telegram", sender, original: { ...original, ocrTries: tries },
+      createdAt: unixDate * 1000, source: "telegram", sender,
+      original: { ...original, ocrTries: tries, ocrError: why, ocrErrorAt: new Date().toISOString() },
     });
     if (!retry) {
       await notifyOwners(`📷 «${firm.name}»: ${why}. Bot bir soatdan keyin yana urinib ko'radi; rasm ilovada saqlandi.`);
@@ -548,8 +580,8 @@ async function ocrPhoto(
   try {
     lists = await readListPhoto(bytesToBase64(bytes), mediaType, Object.keys(firm.prices || {}));
   } catch (err) {
-    console.error(err);
-    await unread(`rasmni o'qib bo'lmadi (${String(err).slice(0, 120)})`);
+    console.error("ocr", ocrErrorText(err));
+    await unread(`rasmni o'qib bo'lmadi (${ocrErrorText(err)})`);
     return false;
   }
   if (!lists.length) {
@@ -557,7 +589,7 @@ async function ocrPhoto(
     return false;
   }
   if (!(await stillUnread())) return false;
-  const { ocrTries: _, ...kept } = original;
+  const { ocrTries: _, ocrError: _e, ocrErrorAt: _a, ...kept } = original;
   const lines: string[] = [];
   const doubts: string[] = [];
   let sum = 0;
@@ -618,7 +650,9 @@ async function retryUnreadPhotos(manual = false) {
   if (!AUTO_OCR || !hasOcrKey()) return;
   const rows: Entry[] = (await rest(`entries?kind=eq.shipment&source=eq.telegram&note=eq.${encodeURIComponent("📷 o'qilmagan rasm")}&select=*&order=created_at.asc`))
     .map(rowToEntry)
-    .filter((e: Entry) => e.original?.photo && !e.original?.deletedAt && !(e.items || []).length && (manual || ((e.original as any).ocrTries || 1) < RETRY_LIMIT));
+    .filter((e: Entry) => e.original?.photo && !e.original?.deletedAt && !(e.items || []).length && (manual || ((e.original as any).ocrTries || 1) < RETRY_LIMIT)
+      // A photo posted in the last 10 minutes with no failed try yet is still being read.
+      && ((e.original as any).ocrTries || Date.now() - (e.original!.at || 0) > 600_000));
   if (!rows.length) return;
   const firms = await listFirms();
   const started = Date.now();
@@ -627,8 +661,8 @@ async function retryUnreadPhotos(manual = false) {
     const firm = firms.find((f) => f.id === e.firm);
     if (!firm) continue;
     const { bytes, mediaType } = await loadPhoto(e.original!.photo!);
-    await ocrPhoto(firm, e.id.replace(/-1$/, ""), Math.floor((e.original!.at || e.createdAt || Date.now()) / 1000),
-      e.sender || e.original!.from || "", e.original, bytes, mediaType, true);
+    await oneAtATime(() => ocrPhoto(firm, e.id.replace(/-1$/, ""), Math.floor((e.original!.at || e.createdAt || Date.now()) / 1000),
+      e.sender || e.original!.from || "", e.original, bytes, mediaType, true));
   }
 }
 
