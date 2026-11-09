@@ -55,7 +55,12 @@
       <div class="hint" id="balHint">Yuklar minus to'lovlar</div>
       <div class="split" aria-hidden="true"><i class="c" id="barCash" style="width:0"></i><i class="b" id="barBank" style="width:0"></i></div>
     </div>
-    <div><div class="k">Jami yuk</div><div class="v num" id="totShip">0</div><div class="hint" id="cntShip">0 ta ro'yxat</div></div>
+    <div class="period-bar">
+      <select id="periodSel" aria-label="Davr"></select>
+      <span class="custom" id="periodCustom" hidden><input type="date" id="pFrom" aria-label="Boshlanishi"> – <input type="date" id="pTo" aria-label="Oxiri"></span>
+      <span class="hint" id="periodRange"></span>
+    </div>
+    <div><div class="k">Yuk</div><div class="v num" id="totShip">0</div><div class="hint" id="cntShip">0 ta ro'yxat</div></div>
     <div><div class="k">Naqd berildi</div><div class="v num" id="totCash">0</div><div class="hint" id="cntCash">0 marta</div></div>
     <div><div class="k">Perechisleniya</div><div class="v num" id="totBank">0</div><div class="hint" id="cntBank">0 marta</div></div>
   </section>
@@ -72,7 +77,6 @@
       <h2>Harakatlar</h2>
       <div class="row" style="flex:0 1 auto;align-items:center">
         <span class="period num" id="periodTxt"></span>
-        <select id="monthSel" aria-label="Oy bo'yicha"><option value="">Hamma oylar</option></select>
       </div>
     </div>
     <div id="ledgerRows" class="cards"><div class="empty">Yuklanmoqda…</div></div>

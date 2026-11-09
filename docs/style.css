@@ -30,6 +30,11 @@ h1{font-family:var(--display);font-weight:700;font-size:clamp(20px,5vw,28px);mar
 .gate{background:var(--debt-soft);color:var(--debt);border-radius:12px;padding:14px 16px;font-weight:500}
 
 .balance{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;grid-template-columns:minmax(0,1.3fr) repeat(3,minmax(0,1fr));gap:14px}
+.balance:not(.skl){grid-template-columns:repeat(3,minmax(0,1fr))}.balance:not(.skl) .main{grid-column:1/-1}
+.balance .period-bar{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.balance .period-bar select{width:auto}
+.balance .period-bar .custom{display:flex;gap:6px;align-items:center}
+.balance .period-bar .custom input{width:auto}
 .balance .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .balance .v{font-weight:600;font-size:18px;margin-top:2px}
 .balance .main .v{font-family:var(--display);font-size:clamp(24px,7vw,34px);font-weight:700}
