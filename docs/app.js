@@ -336,36 +336,68 @@
   const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.createdAt || 0) - (b.createdAt || 0));
   const amountOf = (e) => (e.kind === 'shipment' ? (e.total || 0) : (e.amount || 0));
 
+  // Period for the Yuk / Naqd / Perechisleniya cards and the list below them. Opens on the current
+  // month every time, so a new month starts from zero; the debt figure is always the full balance.
+  const iso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+  function periodRange(p) {
+    const now = new Date(), t = today();
+    if (p === 'month') return [t.slice(0, 8) + '01', t];
+    if (p === 'week') { const back = (now.getDay() + 6) % 7; return [daysAgo(back), t]; }
+    if (p === 'd3') return [daysAgo(2), t];
+    if (p === 'd7') return [daysAgo(6), t];
+    if (p === 'd30') return [daysAgo(29), t];
+    if (p === 'prev') { const a = new Date(now.getFullYear(), now.getMonth() - 1, 1), b = new Date(now.getFullYear(), now.getMonth(), 0); return [iso(a), iso(b)]; }
+    if (p.startsWith('m:')) { const [y, m] = p.slice(2).split('-').map(Number); return [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0))]; }
+    if (p === 'custom') { const a = $('pFrom').value || '0000-01-01', b = $('pTo').value || '9999-12-31'; return a <= b ? [a, b] : [b, a]; }
+    return ['0000-01-01', '9999-12-31'];
+  }
+  function fillPeriods(sorted) {
+    const sel = $('periodSel'), was = sel.value || 'month';
+    const cur = today().slice(0, 7);
+    const months = [...new Set(sorted.map((e) => e.date.slice(0, 7)))].filter((m) => m < cur).sort().reverse();
+    const base = [['month', 'Shu oy'], ['week', 'Shu hafta'], ['d3', 'Oxirgi 3 kun'], ['d7', 'Oxirgi 7 kun'], ['d30', 'Oxirgi 30 kun'], ['prev', 'O\'tgan oy']];
+    const opts = [...base, ...months.map((m) => ['m:' + m, MONTHS[+m.slice(5) - 1] + ' ' + m.slice(0, 4)]), ['all', 'Hammasi'], ['custom', 'Boshqa davr…']];
+    sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    sel.value = opts.some(([v]) => v === was) ? was : 'month';
+    $('periodCustom').hidden = sel.value !== 'custom';
+  }
+
   function render() {
     const sorted = [...entries].sort(byDate);
-    let bal = 0, ship = 0, cash = 0, bank = 0, nS = 0, nC = 0, nB = 0;
+    let bal = 0, ship = 0, paid = 0;
     const balAfter = {};
     sorted.forEach((e) => {
-      if (e.kind === 'shipment') { bal += e.total || 0; ship += e.total || 0; nS++; }
-      else { bal -= e.amount || 0; if (e.method === 'perechisleniya') { bank += e.amount || 0; nB++; } else { cash += e.amount || 0; nC++; } }
+      if (e.kind === 'shipment') { bal += e.total || 0; ship += e.total || 0; }
+      else { bal -= e.amount || 0; paid += e.amount || 0; }
       balAfter[e.id] = bal;
     });
-    $('totShip').textContent = fmt(ship); $('totCash').textContent = fmt(cash); $('totBank').textContent = fmt(bank);
-    $('cntShip').textContent = nS + ' ta ro\'yxat'; $('cntCash').textContent = nC + ' marta'; $('cntBank').textContent = nB + ' marta';
+    fillPeriods(sorted);
+    const p = $('periodSel').value, [from, to] = periodRange(p);
+    const inPeriod = sorted.filter((e) => e.date >= from && e.date <= to);
+    let pShip = 0, cash = 0, bank = 0, nS = 0, nC = 0, nB = 0, hasOpening = false;
+    // The opening balance is a starting debt, not goods shipped in the period.
+    const isOpening = (e) => e.id.startsWith('opening-');
+    inPeriod.forEach((e) => {
+      if (e.kind === 'shipment') { if (isOpening(e)) hasOpening = true; else { pShip += e.total || 0; nS++; } }
+      else if (e.method === 'perechisleniya') { bank += e.amount || 0; nB++; } else { cash += e.amount || 0; nC++; }
+    });
+    $('periodRange').textContent = p === 'all' ? '' : fmtDate(from) + ' – ' + fmtDate(to);
+    $('totShip').textContent = fmt(pShip); $('totCash').textContent = fmt(cash); $('totBank').textContent = fmt(bank);
+    $('cntShip').textContent = nS + ' ta ro\'yxat' + (hasOpening ? ', ostatkasiz' : ''); $('cntCash').textContent = nC + ' marta'; $('cntBank').textContent = nB + ' marta';
     const v = $('balVal');
-    if (bal > 0.004) { $('balLabel').textContent = firmName() + '\'ga qarzimiz'; v.className = 'v num debt'; v.textContent = fmt(bal) + ' $'; $('balHint').textContent = 'Yuklar ' + fmt(ship) + ' − to\'lovlar ' + fmt(cash + bank); }
+    if (bal > 0.004) { $('balLabel').textContent = firmName() + '\'ga qarzimiz'; v.className = 'v num debt'; v.textContent = fmt(bal) + ' $'; $('balHint').textContent = 'Jami: yuklar ' + fmt(ship) + ' − to\'lovlar ' + fmt(paid); }
     else if (bal < -0.004) { $('balLabel').textContent = 'Ortiqcha to\'langan'; v.className = 'v num over'; v.textContent = fmt(-bal) + ' $'; $('balHint').textContent = firmName() + ' keyingi yuklarda hisobga oladi'; }
     else { $('balLabel').textContent = 'Qarz yo\'q'; v.className = 'v num'; v.textContent = '0 $'; $('balHint').textContent = entries.length ? 'Hisob teng' : 'Birinchi yuk yoki to\'lovni qo\'shing'; }
-    const base = Math.max(ship, cash + bank, 1);
-    $('barCash').style.width = (cash / base * 100) + '%'; $('barBank').style.width = (bank / base * 100) + '%';
+    const barBase = Math.max(pShip, cash + bank, 1);
+    $('barCash').style.width = (cash / barBase * 100) + '%'; $('barBank').style.width = (bank / barBase * 100) + '%';
 
-    const sel = $('monthSel'), was = sel.value;
-    const months = [...new Set(sorted.map((e) => e.date.slice(0, 7)))].sort().reverse();
-    sel.innerHTML = '<option value="">Hamma oylar</option>' + months.map((m) => `<option value="${m}">${MONTHS[+m.slice(5) - 1]} ${m.slice(0, 4)}</option>`).join('');
-    sel.value = months.includes(was) ? was : '';
-    const mf = sel.value;
-    const shown = sorted.filter((e) => !mf || e.date.startsWith(mf)).reverse();
-    let pS = 0, pP = 0; shown.forEach((e) => { if (e.kind === 'shipment') pS += e.total || 0; else pP += e.amount || 0; });
-    $('periodTxt').textContent = mf ? 'Yuk ' + fmt(pS) + ' · to\'lov ' + fmt(pP) : '';
+    const shown = [...inPeriod].reverse();
+    $('periodTxt').textContent = 'Yuk ' + fmt(pShip) + ' · to\'lov ' + fmt(cash + bank);
 
     const box = $('ledgerRows');
     if (!shown.length) {
-      box.innerHTML = '<div class="empty"><b>Hali yozuv yo\'q</b>Guruhga yuk ro\'yxati tashlansa, bot o\'zi qo\'shadi. To\'lovni botga «naqd 500$» deb yozing yoki «+ To\'lov»dan kiriting.</div>';
+      box.innerHTML = entries.length ? '<div class="empty"><b>Bu davrda yozuv yo\'q</b>Yuqoridan boshqa davrni tanlang.</div>' : '<div class="empty"><b>Hali yozuv yo\'q</b>Guruhga yuk ro\'yxati tashlansa, bot o\'zi qo\'shadi. To\'lovni botga «naqd 500$» deb yozing yoki «+ To\'lov»dan kiriting.</div>';
     } else {
       const card = (e) => {
         const isS = e.kind === 'shipment';
@@ -420,7 +452,7 @@
     }
 
     const prod = {};
-    sorted.filter((e) => e.kind === 'shipment' && (!mf || e.date.startsWith(mf))).forEach((e) => (e.items || []).forEach((i) => {
+    inPeriod.filter((e) => e.kind === 'shipment').forEach((e) => (e.items || []).forEach((i) => {
       const k = norm(i.name); const p = prod[k] || (prod[k] = { name: i.name, qty: 0, sum: 0, price: 0 });
       p.qty += i.qty; p.sum += i.qty * i.price; if (i.price) p.price = i.price;
     }));
@@ -428,7 +460,11 @@
     $('prodRows').innerHTML = pl.length ? pl.map((p) => `<tr><td>${esc(p.name)}</td><td class="r num">${fmt(p.qty)}</td><td class="r num">${p.price ? fmt(p.price) : '—'}</td><td class="r num">${fmt(p.sum)}</td></tr>`).join('')
       : '<tr><td colspan="4" class="empty">Yuk qo\'shilgach, har bir tovar bo\'yicha jami shu yerda chiqadi.</td></tr>';
   }
-  $('monthSel').onchange = render;
+  $('periodSel').onchange = () => {
+    if ($('periodSel').value === 'custom' && !$('pFrom').value) { $('pFrom').value = today().slice(0, 8) + '01'; $('pTo').value = today(); }
+    render();
+  };
+  $('pFrom').onchange = render; $('pTo').onchange = render;
 
   const pendingDel = {};
   $('ledgerRows').addEventListener('click', async (ev) => {
