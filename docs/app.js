@@ -113,6 +113,8 @@
     render();
   }
   function firmName() { return (firms.find((x) => x.id === firm) || { name: 'Air' }).name; }
+  // Boxes («k») by default; brands counted in pieces show «ta».
+  function unitLabel() { return (firms.find((x) => x.id === firm) || {}).unit === 'dona' ? ' ta' : ' k'; }
   function drawFirms() {
     const box = $('firmTabs');
     box.hidden = firms.length + sklad.length < 2;
@@ -406,7 +408,7 @@
         const noPrice = its.filter((i) => !i.price).length;
         const src = e.source === 'telegram' ? ' · Telegram' : '';
         const desc = isS
-          ? esc(its.slice(0, 2).map((i) => i.name + ' ' + fmt(i.qty) + ' k').join(', ')) + (its.length > 2 ? ' va yana ' + (its.length - 2) + ' ta' : '') + `<small>${e.note ? esc(e.note) : 'manzil yo\'q'}${e.discountPct ? ' · −' + fmt(e.discountPct) + '% (' + fmt(e.gross) + ' $ dan)' : ''}${src}${noPrice ? ' · <span style="color:var(--debt)">' + noPrice + ' tasi narxsiz</span>' : ''}</small>`
+          ? esc(its.slice(0, 2).map((i) => i.name + ' ' + fmt(i.qty) + unitLabel()).join(', ')) + (its.length > 2 ? ' va yana ' + (its.length - 2) + ' ta' : '') + `<small>${e.note ? esc(e.note) : 'manzil yo\'q'}${e.discountPct ? ' · −' + fmt(e.discountPct) + '% (' + fmt(e.gross) + ' $ dan)' : ''}${src}${noPrice ? ' · <span style="color:var(--debt)">' + noPrice + ' tasi narxsiz</span>' : ''}</small>`
           : esc(e.note || 'To\'lov') + '<small>' + [e.sumUzs ? fmt(e.sumUzs) + ' so\'m, kurs ' + fmt(e.rate) : '', e.source === 'telegram' ? 'Telegram' : ''].filter(Boolean).join(' · ') + '</small>';
         const open = !openDetail.has(e.id);
         return `<div class="card">
@@ -426,7 +428,7 @@
         const boxes = ships.reduce((t, e) => t + (e.items || []).reduce((u, i) => u + (i.qty || 0), 0), 0);
         const isOpen = openDays.has(d.date);
         const who = [...new Set(ships.map((e) => e.note).filter(Boolean))];
-        const parts = [ships.length ? ships.length + ' ta yuk' + (boxes ? ', ' + fmt(boxes) + ' k' : '') : '', pays.length ? pays.length + ' ta to\'lov' : ''].filter(Boolean).join(' · ');
+        const parts = [ships.length ? ships.length + ' ta yuk' + (boxes ? ', ' + fmt(boxes) + unitLabel() : '') : '', pays.length ? pays.length + ' ta to\'lov' : ''].filter(Boolean).join(' · ');
         // Each photo once, at the top of the day (several clients often share one photo).
         const seen = new Set(), photos = isOpen ? ships.filter((e) => e.original && e.original.photo && !seen.has(e.original.photo) && seen.add(e.original.photo)) : [];
         const strip = photos.length ? `<div class="dayphotos">${photos.map((e) => { const o = origData[e.id]; return o && o.photo ? `<a href="${esc(o.photo)}" target="_blank" rel="noopener"><img src="${esc(o.photo)}" alt="Rasm"></a>` : '<span class="ph">📷</span>'; }).join('')}</div>` : '';

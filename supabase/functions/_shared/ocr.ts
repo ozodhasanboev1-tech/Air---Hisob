@@ -5,7 +5,7 @@
 
 import Anthropic from "npm:@anthropic-ai/sdk";
 
-export type PhotoItem = { name: string; qty: number; doubt?: string };
+export type PhotoItem = { name: string; qty: number; price?: number; doubt?: string };
 export type PhotoList = { counterparty: string; date: string | null; items: PhotoItem[] };
 
 const SCHEMA = {
@@ -27,10 +27,11 @@ const SCHEMA = {
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["name", "qty", "unsure"],
+              required: ["name", "qty", "price", "unsure"],
               properties: {
                 name: { type: "string" },
                 qty: { type: "number" },
+                price: { type: ["number", "null"], description: "unit price printed on the line (printed invoices); null for handwritten lists" },
                 unsure: { type: "boolean", description: "true if any digit of this line is overwritten, smudged or could be read two ways" },
               },
             },
@@ -127,7 +128,9 @@ function mergeReads(reads: PhotoList[][]): PhotoList[] {
         : unsure ? `${qty} aniq emas`
         : missing ? "bu qator bir o'qishda chiqmadi"
         : undefined;
-      return doubt ? { name: item.name, qty, doubt } : { name: item.name, qty };
+      const out: PhotoItem = { name: item.name, qty };
+      if (item.price) out.price = item.price;
+      return doubt ? { ...out, doubt } : out;
     }),
   }));
 }
@@ -150,7 +153,7 @@ const GEMINI_SCHEMA = {
             items: {
               type: "OBJECT",
               required: ["name", "qty"],
-              properties: { name: { type: "STRING" }, qty: { type: "NUMBER" } },
+              properties: { name: { type: "STRING" }, qty: { type: "NUMBER" }, price: { type: "NUMBER", nullable: true } },
             },
           },
         },
@@ -222,7 +225,7 @@ function cleanLists(parsed: any): PhotoList[] {
       counterparty: String(l.counterparty || "").trim(),
       date: typeof l.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(l.date) ? l.date : null,
       items: (l.items || [])
-        .map((i: any) => ({ name: String(i.name || "").trim(), qty: Number(i.qty) || 0, unsure: !!i.unsure }))
+        .map((i: any) => ({ name: String(i.name || "").trim(), qty: Number(i.qty) || 0, unsure: !!i.unsure, ...(Number(i.price) > 0 ? { price: Number(i.price) } : {}) }))
         .filter((i: any) => i.name && i.qty > 0),
     }))
     .filter((l: PhotoList) => l.items.length);
@@ -233,3 +236,11 @@ export function bytesToBase64(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);
 }
+
+// Layout notes for printed invoices (the Timson / Ojifu / Morfose group): a table exported from the
+// accounting program, one invoice per photo, with its own prices.
+export const INVOICE_HINT =
+  "This photo may instead show a printed invoice (a spreadsheet table with columns № / Название / Кол-во / Цена / Сумма). " +
+  "Then make one list per invoice: counterparty = the name after 'Контрагент:', date = 'Дата заказа' as YYYY-MM-DD, " +
+  "and one item per table row: name = the full product name exactly as printed (brand, product, size, colour and the code in brackets), " +
+  "qty = Кол-во, price = Цена. Skip the Итого row. Quantities here are pieces, not boxes.";
