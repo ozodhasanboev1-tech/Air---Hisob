@@ -178,6 +178,8 @@ export type Firm = {
   sort: number;
   kind?: "ledger" | "sklad";
   skus?: Record<string, { code?: string; aliases?: string[] }>;
+  unit?: string | null; // "dona" = counted in pieces; default boxes
+  aliases?: string[] | null; // other spellings of the brand in product names and payments
 };
 
 export async function listFirms(): Promise<Firm[]> {
@@ -187,6 +189,11 @@ export async function listFirms(): Promise<Firm[]> {
 export async function firmByChat(chatId: number): Promise<Firm | null> {
   const rows = await rest(`firms?chat_id=eq.${chatId}&select=*`);
   return rows[0] ?? null;
+}
+
+// Several firms can share one group (Timson, Ojifu and Morfose post in the same chat).
+export async function firmsByChat(chatId: number): Promise<Firm[]> {
+  return await rest(`firms?chat_id=eq.${chatId}&select=*&order=sort.asc`);
 }
 
 export async function updateFirm(id: string, patch: Partial<Firm>) {

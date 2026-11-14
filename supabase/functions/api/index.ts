@@ -89,7 +89,7 @@ Deno.serve(async (req) => {
           id: f.id, name: f.name, skus: f.skus || {},
           docs: stock.filter((d: any) => d.firm === f.id).map((d: any) => ({ ...d, createdAt: Number(d.created_at), created_at: undefined })),
         }));
-        return json({ sklad, entries, firms: firms.filter((f) => f.kind !== "sklad").map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name, role: owner ? "owner" : "viewer" } });
+        return json({ sklad, entries, firms: firms.filter((f) => f.kind !== "sklad").map((f) => ({ id: f.id, name: f.name, prices: f.prices || {}, discountPct: Number(f.discount_pct) || 0, linked: !!f.chat_id, unit: f.unit || null })), ocr: hasOcrKey(), telegram: { lastRun: telegram.lastRun, lastError: telegram.lastError, lastShipmentAt: telegram.lastShipmentAt }, user: { id: user.id, first_name: user.first_name, role: owner ? "owner" : "viewer" } });
       }
       case "save": {
         const e = cleanEntry(body.entry, await listFirms());

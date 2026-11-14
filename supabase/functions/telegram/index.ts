@@ -7,11 +7,11 @@
 // Telegram calls this URL with the X-Telegram-Bot-Api-Secret-Token header set by setWebhook.
 
 import {
-  createFirm, deleteEntry, Entry, Firm, firmByChat, fmt, getMeta, listEntries, listFirms, loadPhoto, rest, rowToEntry,
+  createFirm, deleteEntry, Entry, Firm, firmByChat, firmsByChat, fmt, getMeta, listEntries, listFirms, loadPhoto, rest, rowToEntry,
   setMeta, shipmentTotals, storePhoto, slugify, summary, tashkentDate, tashkentNow, updateFirm, upsertEntry,
 } from "../_shared/db.ts";
 import { downloadFile, send, tg } from "../_shared/telegram.ts";
-import { bytesToBase64, hasOcrKey, ocrErrorText, readListPhoto } from "../_shared/ocr.ts";
+import { bytesToBase64, hasOcrKey, INVOICE_HINT, ocrErrorText, readListPhoto } from "../_shared/ocr.ts";
 import { canonical, itemsText, KIND_LABEL, parseSklad, SkladDoc, skuKey, stockOf } from "../_shared/sklad.ts";
 import { BALANCE_RE, CANCEL_RE, norm, parseCancel, parsePayment, parseShipments, Payment } from "../_shared/parse.ts";
 
@@ -78,7 +78,10 @@ async function handle(update: any) {
     if (f) await updateFirm(f.id, { chat_id: msg.migrate_to_chat_id });
     return;
   }
-  const firm = isGroup ? await firmByChat(chat.id) : null;
+  const group = isGroup ? await firmsByChat(chat.id) : [];
+  // One group shared by several brands (Timson, Ojifu, Morfose): its own handling below.
+  if (group.length > 1) return void await brandGroupPost(msg, text, group, !!update.edited_message);
+  const firm = group[0] ?? null;
   // Groups not linked to a firm: keep every message raw so its format can be studied first.
   if (isGroup && !firm && !(OWNER_IDS.includes(from.id) && FIRM_CMD_RE.test(text))) {
     return void await saveInbox(msg, !!update.edited_message).catch((e) => console.error("inbox", e));
@@ -151,6 +154,19 @@ async function onAddedToGroup(m: any) {
 
 async function linkGroup(msg: any, name: string) {
   const chatId = msg.chat.id;
+  // «/firma Timson, Ojifu, Morfose»: one group for several brands, each with its own account.
+  const names = name.split(/\s*,\s*/).filter(Boolean);
+  if (names.length > 1) {
+    const linked: Firm[] = [];
+    for (const n of names) {
+      const all = await listFirms();
+      const f = all.find((x) => norm(x.name) === norm(n) || x.id === slugify(n));
+      linked.push(f ? await updateFirm(f.id, { chat_id: chatId })
+        : await createFirm({ id: slugify(n), name: n, chat_id: chatId, sort: all.length, unit: "dona" }));
+    }
+    for (const f of await firmsByChat(chatId)) if (!linked.some((x) => x.id === f.id)) await updateFirm(f.id, { chat_id: null });
+    return void await send(chatId, `✅ Bu guruhda ${linked.map((f) => "«" + f.name + "»").join(", ")} hisobi yuritiladi, har biri alohida.`, msg.message_id);
+  }
   const firms = await listFirms();
   let firm = firms.find((f) => norm(f.name) === norm(name) || f.id === slugify(name));
   const old = firms.find((f) => f.chat_id === chatId);
@@ -201,7 +217,7 @@ async function markPoster(msg: any, firm: Firm | null) {
 function firmPrefix(text: string, firms: Firm[]): { firm?: Firm; rest: string } {
   const t = norm(text);
   for (const f of [...firms].sort((a, b) => b.name.length - a.name.length)) {
-    for (const key of [norm(f.name), f.id]) {
+    for (const key of [norm(f.name), f.id, ...(f.aliases || []).map(norm)]) {
       if (t.startsWith(key + " ")) return { firm: f, rest: text.trim().slice(key.length).trim() };
     }
   }
@@ -209,8 +225,9 @@ function firmPrefix(text: string, firms: Firm[]): { firm?: Firm; rest: string } 
 }
 
 // ---------- payments ----------
-async function payment(msg: any, text: string, isPrivate: boolean, groupFirm: Firm | null, edited: boolean): Promise<boolean> {
-  const firms = await listFirms();
+async function payment(msg: any, text: string, isPrivate: boolean, groupFirm: Firm | null, edited: boolean, pool?: Firm[]): Promise<boolean> {
+  // `pool`: in a multi-brand group only that group's brands can be named or offered.
+  const firms = pool || await listFirms();
   const pre = firmPrefix(text, firms);
   const p = parsePayment(pre.rest);
   if (!p) return false;
@@ -274,7 +291,11 @@ async function onButton(q: any) {
   const data: string = q.data || "";
   const prompt = q.message;
   if (!data.startsWith("pay:") || !prompt) return void await answer();
-  if (!OWNER_IDS.includes(q.from.id)) return void await answer("Ruxsat yo'q");
+  const pressed = (await listFirms()).find((f) => f.id === data.slice(4));
+  // The owner, or in a brand group the person who posts for that brand.
+  if (!OWNER_IDS.includes(q.from.id) && !(pressed && (pressed.poster_ids || []).map(Number).includes(q.from.id))) {
+    return void await answer("Ruxsat yo'q");
+  }
   const edit = (text: string) => tg("editMessageText", { chat_id: prompt.chat.id, message_id: prompt.message_id, text });
   if (data === "pay:-") {
     await edit("✖️ To'lov yozilmadi");
@@ -481,8 +502,8 @@ async function notifyOwners(text: string) {
   for (const id of OWNER_IDS) await send(id, text).catch(() => {});
 }
 
-async function photoShipment(msg: any, firm: Firm) {
-  if (!(await isPoster(msg.from || {}, firm))) return;
+async function photoShipment(msg: any, firm: Firm, checked = false) {
+  if (!checked && !(await isPoster(msg.from || {}, firm))) return;
   if (AUTO_OCR && !hasOcrKey()) {
     return void await notifyOwners(`📷 «${firm.name}» guruhida rasm keldi, lekin uni o'qish uchun ANTHROPIC_API_KEY hali qo'yilmagan.`);
   }
@@ -553,7 +574,11 @@ async function ocrPhoto(
   firm: Firm, base: string, unixDate: number, sender: string, original: any,
   bytes: Uint8Array, mediaType: string, retry: boolean,
 ): Promise<boolean> {
-  const prices = await priceMap(firm);
+  // A group shared by several brands: printed invoices with their own prices, split by brand.
+  const group = firm.chat_id ? await firmsByChat(firm.chat_id) : [];
+  const multi = group.length > 1;
+  const priceMaps: Record<string, Record<string, number>> = {};
+  const pricesOf = async (f: Firm) => priceMaps[f.id] || (priceMaps[f.id] = await priceMap(f));
   // A retry must never overwrite a shipment that was filled in meanwhile (in the app or by hand).
   const stillUnread = async () => {
     if (!retry) return true;
@@ -578,7 +603,9 @@ async function ocrPhoto(
   };
   let lists;
   try {
-    lists = await readListPhoto(bytesToBase64(bytes), mediaType, Object.keys(firm.prices || {}));
+    lists = multi
+      ? await readListPhoto(bytesToBase64(bytes), mediaType, group.flatMap((f) => Object.keys(f.prices || {})), INVOICE_HINT)
+      : await readListPhoto(bytesToBase64(bytes), mediaType, Object.keys(firm.prices || {}));
   } catch (err) {
     console.error("ocr", ocrErrorText(err));
     await unread(`rasmni o'qib bo'lmadi (${ocrErrorText(err)})`);
@@ -593,21 +620,40 @@ async function ocrPhoto(
   const lines: string[] = [];
   const doubts: string[] = [];
   let sum = 0;
-  for (const [i, l] of lists.entries()) {
-    for (const it of l.items) if (it.doubt) doubts.push(`• ${l.counterparty || "?"}: ${it.name} — ${it.doubt}`);
-    const items = l.items.map(({ doubt: _d, ...it }) => ({ ...it, price: prices[norm(it.name)] || 0 }));
-    const { gross, total } = shipmentTotals(items, firm.discount_pct);
+  // One shipment per list, or in a brand group one per list and brand.
+  const docs: { f: Firm; l: (typeof lists)[number]; read: (typeof lists)[number]["items"] }[] = [];
+  const unknown: string[] = [];
+  for (const l of lists) {
+    if (!multi) { docs.push({ f: firm, l, read: l.items }); continue; }
+    for (const f of group) {
+      const read = l.items.filter((it) => brandOf(it.name, group)?.id === f.id);
+      if (read.length) docs.push({ f, l, read });
+    }
+    for (const it of l.items) if (!brandOf(it.name, group)) unknown.push(`• ${it.name} — ${fmt(it.qty)} ta`);
+  }
+  if (!docs.length) {
+    await unread("rasmdagi tovarlarning brendi aniqlanmadi");
+    if (unknown.length) await notifyOwners(`Rasmdagi qatorlar:\n${unknown.join("\n")}`);
+    return false;
+  }
+  if (unknown.length) doubts.push(`• Brendi topilmagan qatorlar, yozilmadi:\n${unknown.join("\n")}`);
+  for (const [i, { f, l, read }] of docs.entries()) {
+    for (const it of read) if (it.doubt) doubts.push(`• ${l.counterparty || "?"}: ${it.name} — ${it.doubt}`);
+    const prices = await pricesOf(f);
+    // Printed invoices carry their own price; otherwise the firm's price list.
+    const items = read.map(({ doubt: _d, ...it }) => ({ ...it, price: (multi && it.price) || prices[norm(it.name)] || 0 }));
+    const { gross, total } = shipmentTotals(items, f.discount_pct);
     const date = l.date || tashkentDate(unixDate);
     await upsertEntry({
       id: `${base}-${i + 1}`,
-      firm: firm.id,
+      firm: f.id,
       kind: "shipment",
       date,
       note: l.counterparty,
       items,
       total,
       gross,
-      discountPct: Number(firm.discount_pct) || 0,
+      discountPct: Number(f.discount_pct) || 0,
       createdAt: unixDate * 1000 + i,
       source: "telegram",
       sender,
@@ -616,11 +662,11 @@ async function ocrPhoto(
     sum += total;
     const noPrice = items.filter((it) => !it.price).length;
     const qty = items.reduce((s, it) => s + it.qty, 0);
-    lines.push(`• ${l.counterparty || "?"} (${ddmm(date)}): ${items.length} xil, ${fmt(qty)} k → ${fmt(total)} $${noPrice ? ` (${noPrice} tasi narxsiz)` : ""}`);
+    lines.push(`• ${multi ? f.name + ", " : ""}${l.counterparty || "?"} (${ddmm(date)}): ${items.length} xil, ${fmt(qty)} ${unitOf(f)} →${fmt(total)} $${noPrice ? ` (${noPrice} tasi narxsiz)` : ""}`);
   }
   const t = await getMeta("telegram");
   await setMeta("telegram", { ...t, lastRun: new Date().toISOString(), lastError: "", lastShipmentAt: new Date().toISOString() });
-  const disc = firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
+  const disc = !multi && firm.discount_pct ? `, −${fmt(firm.discount_pct)}% bilan` : "";
   const head = retry ? `📷 «${firm.name}»: ${sender} ${when(unixDate)} dagi rasm qayta urinishda o'qildi${disc}` : `📷 «${firm.name}» rasmi o'qildi${disc}`;
   const check = doubts.length ? `\n\n⚠️ Rasmda shu sonlar aniq emas, tekshirib qo'ying:\n${doubts.join("\n")}` : "";
   await notifyOwners(`${head}:\n${lines.join("\n")}\nJami: ${fmt(sum)} $${check}\n\nXato bo'lsa ilovada «Tahrirlash» bilan tuzating.`);
@@ -628,6 +674,33 @@ async function ocrPhoto(
 }
 
 const RETRY_LIMIT = 5;
+
+const unitOf = (f: Firm) => (f.unit === "dona" ? "ta" : "k");
+
+// Which brand of a shared group a product line belongs to: its name holds the brand's name or an alias.
+function brandOf(name: string, group: Firm[]): Firm | undefined {
+  const n = norm(name);
+  return group.find((f) => [f.name, ...(f.aliases || [])].some((a) => a && n.includes(norm(a))));
+}
+
+// Posts in a group shared by several brands. The poster (or the owner) posts invoice photos and
+// payments; a payment names its brand («Timson naqd 500$»), otherwise the bot asks with buttons.
+async function brandGroupPost(msg: any, text: string, group: Firm[], edited: boolean) {
+  const from = msg.from || {};
+  if (from.is_bot) return;
+  const owner = OWNER_IDS.includes(from.id);
+  if (owner && FIRM_CMD_RE.test(text)) return void await linkGroup(msg, text.match(FIRM_CMD_RE)![1].trim());
+  let poster = false;
+  for (const f of group) if (await isPoster(from, f)) poster = true;
+  if (!owner && !poster) return;
+  if (msg.photo) {
+    if (edited) return void await photoEdited(msg, group[0]);
+    return void await photoShipment(msg, group[0], true);
+  }
+  if (!text) return;
+  if (owner && CANCEL_RE.test(text)) return void await cancel(msg, text, false);
+  await payment(msg, text, false, null, edited, group);
+}
 
 // «qayta o'qi» from the owner: retry unread photos right away instead of waiting for the hourly job.
 async function rereadNow(chatId: number) {
