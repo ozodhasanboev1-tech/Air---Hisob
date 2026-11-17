@@ -623,10 +623,14 @@ async function ocrPhoto(
   // One shipment per list, or in a brand group one per list and brand.
   const docs: { f: Firm; l: (typeof lists)[number]; read: (typeof lists)[number]["items"] }[] = [];
   const unknown: string[] = [];
+  // A line whose brand matches no firm of the group is never dropped: it goes to the group's main
+  // firm (the first by sort, e.g. Timson, which also sells other Chinese brands) and the owner is told.
+  const main = group[0];
+  const brandIn = (name: string) => brandOf(name, group) || main;
   for (const l of lists) {
     if (!multi) { docs.push({ f: firm, l, read: l.items }); continue; }
     for (const f of group) {
-      const read = l.items.filter((it) => brandOf(it.name, group)?.id === f.id);
+      const read = l.items.filter((it) => brandIn(it.name)?.id === f.id);
       if (read.length) docs.push({ f, l, read });
     }
     for (const it of l.items) if (!brandOf(it.name, group)) unknown.push(`• ${it.name} — ${fmt(it.qty)} ta`);
@@ -636,7 +640,7 @@ async function ocrPhoto(
     if (unknown.length) await notifyOwners(`Rasmdagi qatorlar:\n${unknown.join("\n")}`);
     return false;
   }
-  if (unknown.length) doubts.push(`• Brendi topilmagan qatorlar, yozilmadi:\n${unknown.join("\n")}`);
+  if (unknown.length) doubts.push(`• Yangi brend, «${main.name}» hisobiga yozildi (boshqa firmaniki bo'lsa ilovada ko'chiring):\n${unknown.join("\n")}`);
   for (const [i, { f, l, read }] of docs.entries()) {
     for (const it of read) if (it.doubt) doubts.push(`• ${l.counterparty || "?"}: ${it.name} — ${it.doubt}`);
     const prices = await pricesOf(f);
