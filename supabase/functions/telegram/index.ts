@@ -942,7 +942,7 @@ async function skladReport(chatId: number, rest_: string) {
     opening ? `Qoldiq (korobka), ostatka ${ddmm(opening.date)} dan:` : "Ostatka hali kiritilmagan («ostatka» buyrug'i). Harakatlar yig'indisi:",
     ...(skus.length ? skus.map((k) => `  ${k} — ${fmt(stock[k])}`) : ["  —"]),
     "",
-    `${ddmm(date)}: chiqim ${sum("out")} · prixod ${sum("in")} · vozvrat ${sum("return")}`,
+    `${ddmm(date)}: chiqim ${sum("out")} · prixod ${sum("in")} · vozvrat ${sum("return")}${dayRows.some((r) => r.kind === "adjust") ? ` · tuzatish ${sum("adjust")}` : ""}`,
     ...dayRows.map((r) => `  ${KIND_LABEL[r.kind as keyof typeof KIND_LABEL]}${r.party && r.kind !== "in" ? ` ${r.party}` : ""}: ${itemsText(r.items)}`),
     "",
     tashkentNow(),

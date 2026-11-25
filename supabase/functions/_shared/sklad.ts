@@ -12,8 +12,8 @@ export type SkladItem = { sku: string; qty: number; doubt?: string };
 export type SkladDoc = { kind: SkladKind; date: string | null; party: string; items: SkladItem[] };
 
 export const DEFAULT_SKU = "5л";
-export const KIND_LABEL: Record<SkladKind | "opening", string> = {
-  out: "Chiqim", in: "Prixod", return: "Vozvrat", opening: "Ostatka",
+export const KIND_LABEL: Record<SkladKind | "opening" | "adjust", string> = {
+  out: "Chiqim", in: "Prixod", return: "Vozvrat", opening: "Ostatka", adjust: "Tuzatish",
 };
 
 // Spaces around the separators happen too: «19.  10.26».
@@ -120,6 +120,7 @@ export function parseSklad(text: string): SkladDoc[] {
 }
 
 // Stock per SKU from documents: opening + prixod + vozvrat − chiqim.
+// «adjust» (a hand correction in the app) carries signed quantities, so it simply adds up.
 export function stockOf(docs: { kind: string; items: { sku: string; qty: number }[] }[]): Record<string, number> {
   const s: Record<string, number> = {};
   for (const d of docs) {
