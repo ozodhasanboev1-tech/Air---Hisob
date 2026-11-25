@@ -16,6 +16,7 @@
   const norm = (s) => String(s).toLowerCase().replace(/[абвекмнорстух]/g, (c) => LOOKALIKE[c]).replace(/\s+/g, ' ').trim();
 
   let sklad = []; // warehouse firms (SA): {id, name, skus, docs}
+  const PAY_REPORT = '__pay'; // the «Jami to'lovlar» tab: payments of every firm together
   let allEntries = [], entries = [], firms = [], firm = 'air', priceList = {}, items = [], method = 'naqd', cur = 'USD', shipEditId = null, payEditId = null;
   const openDetail = new Set(); // shipments whose item list the user folded away
   const openDays = new Set();
@@ -64,7 +65,7 @@
       if (viewOnly && ['ship', 'pay'].includes((document.querySelector('.tabs button[aria-selected="true"]') || {}).dataset?.tab)) showTab('ledger');
       $('photoRow').hidden = !d.ocr;
       const all = [...firms, ...sklad];
-      if (!all.some((f) => f.id === firm)) firm = (all.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;
+      if (!all.some((f) => f.id === firm) && !(firm === PAY_REPORT && firms.length > 1)) firm = (all.find((f) => f.id === storedFirm()) || firms[0] || { id: 'air' }).id;
       selectFirm(firm, true);
       const t = d.telegram || {};
       setStore('ok', 'Ulangan · ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }));
@@ -89,10 +90,17 @@
     const changed = id !== firm;
     firm = id;
     try { localStorage.setItem('firm', id); } catch (e) {}
-    const sk = sklad.find((x) => x.id === id);
+    const sk = sklad.find((x) => x.id === id), rp = id === PAY_REPORT;
     $('skladPane').hidden = !sk;
-    document.querySelector('section.balance:not(.skl)').hidden = !!sk;
-    document.querySelector('.tabs').hidden = !!sk;
+    $('payReport').hidden = !rp;
+    document.querySelector('section.balance:not(.skl)').hidden = !!sk || rp;
+    document.querySelector('.tabs').hidden = !!sk || rp;
+    if (rp) {
+      document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = true; });
+      document.title = 'Jami to\'lovlar'; $('title').textContent = 'Jami to\'lovlar';
+      document.querySelector('header .sub').textContent = 'Naqd va perechisleniya, hamma firma bo\'yicha, dollarda ($)';
+      drawFirms(); renderPayReport(); return;
+    }
     if (sk) {
       document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = true; });
       document.title = sk.name + ' ombori'; $('title').textContent = sk.name + ' ombori';
@@ -124,7 +132,7 @@
     }).join('') + sklad.map((sk) => {
       const t = Object.values(stockOf(sk)).reduce((a, r) => a + qLeft(r), 0);
       return `<button type="button" data-firm="${esc(sk.id)}" aria-pressed="${sk.id === firm}">${esc(sk.name)} ombori<small class="num">${fmt(t)} k</small></button>`;
-    }).join('');
+    }).join('') + (firms.length > 1 ? `<button type="button" data-firm="${PAY_REPORT}" aria-pressed="${firm === PAY_REPORT}">Jami to'lovlar<small>hamma firma</small></button>` : '');
   }
   $('firmTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) selectFirm(b.dataset.firm); });
   async function removeEntry(id) { await api('delete', { id }); await load(true); }
@@ -342,7 +350,7 @@
   // month every time, so a new month starts from zero; the debt figure is always the full balance.
   const iso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
-  function periodRange(p) {
+  function periodRange(p, fromId = 'pFrom', toId = 'pTo') {
     const now = new Date(), t = today();
     if (p === 'month') return [t.slice(0, 8) + '01', t];
     if (p === 'week') { const back = (now.getDay() + 6) % 7; return [daysAgo(back), t]; }
@@ -351,18 +359,18 @@
     if (p === 'd30') return [daysAgo(29), t];
     if (p === 'prev') { const a = new Date(now.getFullYear(), now.getMonth() - 1, 1), b = new Date(now.getFullYear(), now.getMonth(), 0); return [iso(a), iso(b)]; }
     if (p.startsWith('m:')) { const [y, m] = p.slice(2).split('-').map(Number); return [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0))]; }
-    if (p === 'custom') { const a = $('pFrom').value || '0000-01-01', b = $('pTo').value || '9999-12-31'; return a <= b ? [a, b] : [b, a]; }
+    if (p === 'custom') { const a = $(fromId).value || '0000-01-01', b = $(toId).value || '9999-12-31'; return a <= b ? [a, b] : [b, a]; }
     return ['0000-01-01', '9999-12-31'];
   }
-  function fillPeriods(sorted) {
-    const sel = $('periodSel'), was = sel.value || 'month';
+  function fillPeriods(sorted, selId = 'periodSel', customId = 'periodCustom') {
+    const sel = $(selId), was = sel.value || 'month';
     const cur = today().slice(0, 7);
     const months = [...new Set(sorted.map((e) => e.date.slice(0, 7)))].filter((m) => m < cur).sort().reverse();
     const base = [['month', 'Shu oy'], ['week', 'Shu hafta'], ['d3', 'Oxirgi 3 kun'], ['d7', 'Oxirgi 7 kun'], ['d30', 'Oxirgi 30 kun'], ['prev', 'O\'tgan oy']];
     const opts = [...base, ...months.map((m) => ['m:' + m, MONTHS[+m.slice(5) - 1] + ' ' + m.slice(0, 4)]), ['all', 'Hammasi'], ['custom', 'Boshqa davr…']];
     sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
     sel.value = opts.some(([v]) => v === was) ? was : 'month';
-    $('periodCustom').hidden = sel.value !== 'custom';
+    $(customId).hidden = sel.value !== 'custom';
   }
 
   function render() {
@@ -499,10 +507,52 @@
     }
   });
 
+  // ---------- jami to'lovlar: every firm's payments for a period, by type (owner, 25.11) ----------
+  let rpMethod = 'all';
+  function renderPayReport() {
+    const pays = allEntries.filter((e) => e.kind === 'payment').sort(byDate);
+    fillPeriods(pays, 'rpSel', 'rpCustom');
+    const p = $('rpSel').value, [from, to] = periodRange(p, 'rpFrom', 'rpTo');
+    const isBank = (e) => e.method === 'perechisleniya';
+    const inP = pays.filter((e) => e.date >= from && e.date <= to);
+    const shown = inP.filter((e) => rpMethod === 'all' || (rpMethod === 'perechisleniya') === isBank(e));
+    document.querySelectorAll('[data-rpm]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.rpm === rpMethod));
+    $('rpRange').textContent = p === 'all' ? 'butun davr' : fmtDate(from) + ' – ' + fmtDate(to);
+    const by = {}; let cash = 0, bank = 0, uzs = 0;
+    shown.forEach((e) => {
+      const r = by[e.firm || 'air'] || (by[e.firm || 'air'] = { cash: 0, bank: 0, n: 0 });
+      if (isBank(e)) { r.bank += e.amount || 0; bank += e.amount || 0; } else { r.cash += e.amount || 0; cash += e.amount || 0; }
+      r.n++; if (e.sumUzs) uzs += e.sumUzs;
+    });
+    $('rpLabel').textContent = rpMethod === 'naqd' ? 'Jami naqd' : rpMethod === 'perechisleniya' ? 'Jami perechisleniya' : 'Jami to\'langan';
+    $('rpTotal').textContent = fmt(cash + bank) + ' $';
+    $('rpCount').textContent = shown.length + ' ta to\'lov' + (uzs ? ' · shundan so\'mda ' + fmt(uzs) + ' so\'m' : '');
+    $('rpCash').textContent = fmt(cash); $('rpBank').textContent = fmt(bank);
+    const nameOf = (id) => (firms.find((f) => f.id === id) || { name: id }).name;
+    const rows = Object.entries(by).sort((a, b) => (b[1].cash + b[1].bank) - (a[1].cash + a[1].bank));
+    const d = (v) => (v ? fmt(v) : '—');
+    $('rpFirms').innerHTML = rows.length ? rows.map(([id, r]) => `<tr><td>${esc(nameOf(id))}</td><td class="r num">${d(r.cash)}</td><td class="r num">${d(r.bank)}</td><td class="r num">${fmt(r.cash + r.bank)}</td><td class="r num">${r.n}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="empty">Bu davrda to\'lov yo\'q</td></tr>';
+    $('rpFoot').innerHTML = rows.length > 1 ? `<tr><td>Jami</td><td class="r num">${d(cash)}</td><td class="r num">${d(bank)}</td><td class="r num">${fmt(cash + bank)}</td><td class="r num">${shown.length}</td></tr>` : '';
+    $('rpList').innerHTML = [...shown].reverse().map((e) => `<div class="card">
+      <div class="top"><span class="when num">${isBank(e) ? '<span class="tag bank">PERECH.</span>' : '<span class="tag cash">NAQD</span>'}${fmtDate(e.date)}</span><span class="amt num minus">${fmt(e.amount)} $</span></div>
+      <div class="desc">${esc(nameOf(e.firm || 'air'))}${e.note ? ' — ' + esc(e.note) : ''}${e.sumUzs ? `<small>${fmt(e.sumUzs)} so'm, kurs ${fmt(e.rate)}</small>` : ''}</div>
+    </div>`).join('');
+  }
+  document.querySelectorAll('[data-rpm]').forEach((b) => { b.onclick = () => { rpMethod = b.dataset.rpm; renderPayReport(); }; });
+  $('rpSel').onchange = () => {
+    if ($('rpSel').value === 'custom' && !$('rpFrom').value) { $('rpFrom').value = today().slice(0, 8) + '01'; $('rpTo').value = today(); }
+    renderPayReport();
+  };
+  $('rpFrom').onchange = renderPayReport; $('rpTo').onchange = renderPayReport;
+
   // ---------- ombor (SA) ----------
-  // Stock per SKU: opening + prixod + vozvrat − chiqim; moves dated before the opening are already in it.
-  const KIND = { out: ['out', 'CHIQIM'], in: ['in', 'PRIXOD'], return: ['ret', 'VOZVRAT'] };
-  const qLeft = (r) => r.open + r.in + r.ret - r.out;
+  // Stock per SKU: opening + prixod + vozvrat − chiqim ± tuzatish; moves dated before the opening are already in it.
+  // «Tuzatish» (adjust) is a hand correction with signed quantities, kept as its own move (owner, 25.11).
+  const KIND = { out: ['out', 'CHIQIM'], in: ['in', 'PRIXOD'], return: ['ret', 'VOZVRAT'], adjust: ['adj', 'TUZATISH'] };
+  const COL = { opening: 'open', return: 'ret', adjust: 'adj' };
+  const qLeft = (r) => r.open + r.in + r.ret - r.out + r.adj;
+  const signed = (v) => (v > 0 ? '+' : '') + fmt(v);
   function stockOf(sk, day) {
     const opening = sk.docs.find((d) => d.kind === 'opening');
     const rows = {};
@@ -510,8 +560,8 @@
       if (d.kind !== 'opening' && opening && d.date < opening.date) return;
       if (day && d.date !== day) return;
       (d.items || []).forEach((i) => {
-        const r = rows[i.sku] || (rows[i.sku] = { open: 0, out: 0, in: 0, ret: 0 });
-        r[d.kind === 'opening' ? 'open' : d.kind === 'return' ? 'ret' : d.kind] += Number(i.qty) || 0;
+        const r = rows[i.sku] || (rows[i.sku] = { open: 0, out: 0, in: 0, ret: 0, adj: 0 });
+        r[COL[d.kind] || d.kind] += Number(i.qty) || 0;
       });
     });
     return rows;
@@ -533,8 +583,8 @@
     const n = (v) => (v ? fmt(v) : '—');
     $('skRows').innerHTML = keys.length ? keys.map((k) => {
       const r = rows[k], q = qLeft(r), code = (sk.skus[k] || {}).code;
-      return `<tr class="${q === 0 ? 'zero' : ''}"><td>${esc(k)}${code ? ` <span class="example">${esc(code)}</span>` : ''}</td><td class="r num q${q < 0 ? ' neg' : ''}">${fmt(q)}</td><td class="r num">${n(r.open)}</td><td class="r num">${n(r.out)}</td><td class="r num">${n(r.in)}</td><td class="r num">${n(r.ret)}</td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="empty">Hali hech narsa yo\'q</td></tr>';
+      return `<tr class="${q === 0 ? 'zero' : ''}"><td>${esc(k)}${code ? ` <span class="example">${esc(code)}</span>` : ''}</td><td class="r num q${q < 0 ? ' neg' : ''}">${fmt(q)}<button type="button" class="ghost pm ownonly" data-skadj="${esc(k)}" aria-label="${esc(k)} sonini o'zgartirish">±</button></td><td class="r num">${n(r.open)}</td><td class="r num">${n(r.out)}</td><td class="r num">${n(r.in)}</td><td class="r num">${n(r.ret)}</td><td class="r num">${r.adj ? signed(r.adj) : '—'}</td></tr>`;
+    }).join('') : '<tr><td colspan="7" class="empty">Hali hech narsa yo\'q</td></tr>';
 
     const moves = sk.docs.filter((d) => d.kind !== 'opening').slice().reverse();
     $('skMoves').innerHTML = moves.length ? moves.map((d) => {
@@ -543,11 +593,11 @@
       const t = o.at ? new Date(o.at).toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
       const doubts = (d.items || []).filter((i) => i.doubt);
       const early = opening && d.date < opening.date;
-      const ph = skPhotos[d.id];
+      const ph = skPhotos[d.id], adj = d.kind === 'adjust';
       return `<div class="card">
-        <div class="top"><span class="when num"><span class="tag ${cls}">${label}</span>${fmtDate(d.date)}</span><span class="amt num">${fmt((d.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0))} k</span></div>
-        <div class="desc">${esc(d.kind === 'in' ? 'Prixod' : (d.party || 'mijoz yozilmagan'))}<small>${esc([o.from, t, o.editedAt ? 'o\'zgartirilgan' : ''].filter(Boolean).join(' · '))}</small></div>
-        <ul>${(d.items || []).map((i) => `<li>${esc(i.sku)} — <span class="num">${fmt(i.qty)} k</span>${i.doubt ? ` <span class="warn">⚠️ ${esc(i.doubt)}</span>` : ''}</li>`).join('')}</ul>
+        <div class="top"><span class="when num"><span class="tag ${cls}">${label}</span>${fmtDate(d.date)}</span><span class="amt num">${(adj ? signed : fmt)((d.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0))} k</span></div>
+        <div class="desc">${esc(d.kind === 'in' ? 'Prixod' : adj ? (d.party || 'Qo\'lda tuzatish') : (d.party || 'mijoz yozilmagan'))}<small>${esc([o.from, t, o.editedAt || o.editedInAppAt ? 'o\'zgartirilgan' : ''].filter(Boolean).join(' · '))}</small></div>
+        <ul>${(d.items || []).map((i) => `<li>${esc(i.sku)} — <span class="num">${(adj ? signed : fmt)(i.qty)} k</span>${i.doubt ? ` <span class="warn">⚠️ ${esc(i.doubt)}</span>` : ''}</li>`).join('')}</ul>
         ${early ? '<span class="warn">Sana ostatkadan oldin, qoldiqqa qo\'shilmagan</span>' : ''}
         ${doubts.length ? '<span class="warn">Rasmdagi raqamni tekshiring</span>' : ''}
         ${o.text ? `<details><summary class="example">💬 Asli</summary><div class="orig"><pre>${esc(o.text)}</pre></div></details>` : ''}
@@ -561,27 +611,30 @@
 
   // ---------- editing warehouse moves by hand ----------
   let skDraft = null, skDelAsk = null;
-  const KIND_OPTS = [['out', 'Chiqim'], ['in', 'Prixod'], ['return', 'Vozvrat']];
-  function skEditStart(sk, doc) {
+  const KIND_OPTS = [['out', 'Chiqim'], ['in', 'Prixod'], ['return', 'Vozvrat'], ['adjust', 'Tuzatish (+ / −)']];
+  // Draft rows keep the count positive and the direction in «sign» (only used by a correction).
+  function skEditStart(sk, doc, preset) {
     skDraft = doc
-      ? { id: doc.id, kind: doc.kind, date: doc.date, party: doc.party || '', items: (doc.items || []).map((i) => ({ sku: i.sku, qty: i.qty })) }
-      : { id: null, kind: 'out', date: today(), party: '', items: [{ sku: Object.keys(sk.skus)[0] || '', qty: 0 }] };
+      ? { id: doc.id, kind: doc.kind, date: doc.date, party: doc.party || '', items: (doc.items || []).map((i) => ({ sku: i.sku, qty: Math.abs(i.qty), sign: i.qty < 0 ? -1 : 1 })) }
+      : Object.assign({ id: null, kind: 'out', date: today(), party: '', items: [{ sku: Object.keys(sk.skus)[0] || '', qty: 0, sign: 1 }] }, preset || {});
     skDelAsk = null; renderSklad();
     const f = $('skForm'); if (f) f.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
   function skFormHtml(sk) {
-    const d = skDraft, opening = d.kind === 'opening';
+    const d = skDraft, opening = d.kind === 'opening', adj = d.kind === 'adjust';
     const codeOf = (k) => (sk.skus[k] || {}).code || '99999';
     const names = [...new Set([...Object.keys(sk.skus), ...d.items.map((i) => i.sku).filter(Boolean)])].sort((a, b) => codeOf(a).localeCompare(codeOf(b)) || a.localeCompare(b));
     return `<form class="card skform" id="skForm">
-      <div class="editing"><span>${opening ? 'Ostatka' : d.id ? 'Harakatni tahrirlash' : 'Yangi harakat'}</span><button type="button" class="ghost" data-skf="cancel">Bekor qilish</button></div>
+      <div class="editing"><span>${opening ? 'Ostatka' : adj ? (d.id ? 'Tuzatishni tahrirlash' : 'Sonini tuzatish') : d.id ? 'Harakatni tahrirlash' : 'Yangi harakat'}</span><button type="button" class="ghost" data-skf="cancel">Bekor qilish</button></div>
       <div class="row">
         ${opening ? '' : `<label style="flex:1 1 120px">Turi<select data-skf="kind">${KIND_OPTS.map(([v, l]) => `<option value="${v}"${d.kind === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`}
         <label style="flex:1 1 140px">Sana<input type="date" data-skf="date" value="${esc(d.date)}"></label>
-        ${opening ? '' : `<label style="flex:2 1 180px">Mijoz / kimdan<input data-skf="party" value="${esc(d.party)}" placeholder="masalan, Абдулло"></label>`}
+        ${opening ? '' : adj ? `<label style="flex:2 1 180px">Izoh (sabab)<input data-skf="party" value="${esc(d.party)}" placeholder="masalan, sanoqda chiqdi"></label>` : `<label style="flex:2 1 180px">Mijoz / kimdan<input data-skf="party" value="${esc(d.party)}" placeholder="masalan, Абдулло"></label>`}
       </div>
-      <div class="tblwrap"><table class="items"><thead><tr><th>Tovar</th><th class="r">Korobka</th><th></th></tr></thead><tbody>
+      ${adj ? '<p class="example">«+» omborga qo\'shadi, «−» ayiradi. Har bir tuzatish alohida harakat bo\'lib saqlanadi.</p>' : ''}
+      <div class="tblwrap"><table class="items"><thead><tr><th>Tovar</th>${adj ? '<th></th>' : ''}<th class="r">Korobka</th><th></th></tr></thead><tbody>
         ${d.items.map((i, n) => `<tr><td><select data-ski="${n}" data-f="sku">${names.map((k) => `<option${k === i.sku ? ' selected' : ''}>${esc(k)}</option>`).join('')}</select></td>
+          ${adj ? `<td><span class="seg pmseg"><button type="button" data-sksign="${n}" data-v="1" aria-pressed="${i.sign !== -1}">+</button><button type="button" data-sksign="${n}" data-v="-1" aria-pressed="${i.sign === -1}">−</button></span></td>` : ''}
           <td class="r"><input class="n num" inputmode="numeric" data-ski="${n}" data-f="qty" value="${i.qty || ''}"></td>
           <td><button type="button" class="ghost danger" data-skidel="${n}" aria-label="O'chirish">×</button></td></tr>`).join('')}
       </tbody></table></div>
@@ -589,6 +642,12 @@
     </form>`;
   }
   $('skAdd').onclick = () => { const sk = sklad.find((x) => x.id === firm); if (sk) skEditStart(sk, null); };
+  $('skAdj').onclick = () => { const sk = sklad.find((x) => x.id === firm); if (sk) skEditStart(sk, null, { kind: 'adjust' }); };
+  // «±» next to a product in the stock table opens a correction for that product.
+  $('skRows').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-skadj]'); const sk = sklad.find((x) => x.id === firm);
+    if (b && sk) skEditStart(sk, null, { kind: 'adjust', items: [{ sku: b.dataset.skadj, qty: 0, sign: 1 }] });
+  });
   $('skEditOpen').onclick = () => {
     const sk = sklad.find((x) => x.id === firm); if (!sk) return;
     const op = sk.docs.find((d) => d.kind === 'opening');
@@ -598,14 +657,17 @@
     if (!skDraft) return;
     const t = e.target;
     if (t.dataset.skf && ['kind', 'date', 'party'].includes(t.dataset.skf)) skDraft[t.dataset.skf] = t.value;
-    if (t.dataset.ski != null) skDraft.items[+t.dataset.ski][t.dataset.f] = t.dataset.f === 'qty' ? parseNum(t.value) : t.value;
+    if (t.dataset.ski != null) skDraft.items[+t.dataset.ski][t.dataset.f] = t.dataset.f === 'qty' ? Math.abs(parseNum(t.value)) : t.value;
+    if (t.dataset.skf === 'kind') renderSklad(); // a correction shows the +/− buttons
   });
   $('skMoves').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!skDraft) return;
     const btn = e.submitter; if (btn) btn.disabled = true;
     try {
-      await api('stockSave', { doc: Object.assign({ firm }, skDraft) });
+      const adj = skDraft.kind === 'adjust';
+      const items = skDraft.items.map((i) => ({ sku: i.sku, qty: adj && i.sign === -1 ? -i.qty : i.qty }));
+      await api('stockSave', { doc: Object.assign({ firm }, skDraft, { items }) });
       skDraft = null; haptic('success'); await load(true);
     } catch (err) { msg('skMsg', err.message, true); haptic('error'); }
     finally { if (btn) btn.disabled = false; }
@@ -613,10 +675,11 @@
 
   $('skMoves').addEventListener('click', async (ev) => {
     const sk = sklad.find((x) => x.id === firm);
-    const c = ev.target.closest('button[data-skf],button[data-skidel],button[data-skedit],button[data-skdel]');
+    const c = ev.target.closest('button[data-skf],button[data-skidel],button[data-skedit],button[data-skdel],button[data-sksign]');
     if (c && sk) {
       if (c.dataset.skf === 'cancel') { skDraft = null; renderSklad(); }
-      else if (c.dataset.skf === 'addrow') { skDraft.items.push({ sku: Object.keys(sk.skus)[0] || '', qty: 0 }); renderSklad(); }
+      else if (c.dataset.skf === 'addrow') { skDraft.items.push({ sku: Object.keys(sk.skus)[0] || '', qty: 0, sign: 1 }); renderSklad(); }
+      else if (c.dataset.sksign != null) { skDraft.items[+c.dataset.sksign].sign = +c.dataset.v; renderSklad(); }
       else if (c.dataset.skidel != null) { skDraft.items.splice(+c.dataset.skidel, 1); renderSklad(); }
       else if (c.dataset.skedit) skEditStart(sk, sk.docs.find((d) => d.id === c.dataset.skedit));
       else if (c.dataset.skdel) {

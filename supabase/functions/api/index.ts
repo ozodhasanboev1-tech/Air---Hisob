@@ -154,11 +154,12 @@ Deno.serve(async (req) => {
         const d = body.doc || {};
         const f = (await listFirms()).find((x) => x.id === d.firm && x.kind === "sklad");
         if (!f) return json({ error: "invalid", message: "Ombor topilmadi." }, 400);
-        if (!["out", "in", "return", "opening"].includes(d.kind)) return json({ error: "invalid", message: "Harakat turi noto'g'ri." }, 400);
+        if (!["out", "in", "return", "opening", "adjust"].includes(d.kind)) return json({ error: "invalid", message: "Harakat turi noto'g'ri." }, 400);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d.date || ""))) return json({ error: "invalid", message: "Sana noto'g'ri." }, 400);
         const items = (Array.isArray(d.items) ? d.items : [])
           .map((i: any) => ({ sku: String(i.sku || "").replace(/\s+/g, " ").trim().slice(0, 100), qty: Math.round(num(i.qty)) }))
-          .filter((i: any) => i.sku && i.qty > 0);
+          // A correction («adjust») adds (+) or takes away (−) boxes; every other move counts up.
+          .filter((i: any) => i.sku && (d.kind === "adjust" ? i.qty !== 0 : i.qty > 0));
         if (!items.length) return json({ error: "invalid", message: "Kamida bitta tovar va sonini kiriting." }, 400);
         const party = String(d.party || "").trim().slice(0, 200);
         const now = Date.now();

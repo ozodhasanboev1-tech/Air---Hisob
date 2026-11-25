@@ -37,15 +37,42 @@
       <h2>Qoldiq, korobka</h2>
       <div class="tblwrap">
         <table>
-          <thead><tr><th>Tovar</th><th class="r">Qoldiq</th><th class="r" id="skOpenHead">Ostatka</th><th class="r">Chiqim</th><th class="r">Prixod</th><th class="r">Vozvrat</th></tr></thead>
+          <thead><tr><th>Tovar</th><th class="r">Qoldiq</th><th class="r" id="skOpenHead">Ostatka</th><th class="r">Chiqim</th><th class="r">Prixod</th><th class="r">Vozvrat</th><th class="r">Tuzatish</th></tr></thead>
           <tbody id="skRows"></tbody>
         </table>
       </div>
     </div>
     <div class="panel">
-      <div class="ledger-head"><h2>Harakatlar</h2><span class="acts ownonly"><button type="button" class="ghost" id="skEditOpen">Ostatkani tahrirlash</button><button type="button" class="ghost" id="skAdd">+ Harakat</button></span></div>
+      <div class="ledger-head"><h2>Harakatlar</h2><span class="acts ownonly"><button type="button" class="ghost" id="skEditOpen">Ostatkani tahrirlash</button><button type="button" class="ghost" id="skAdj">± Sonini tuzatish</button><button type="button" class="ghost" id="skAdd">+ Harakat</button></span></div>
       <div id="skMoves" class="cards"></div>
     </div>
+  </section>
+
+  <section class="panel rp" id="payReport" aria-label="Jami to'lovlar" hidden>
+    <h2>Jami to'lovlar, hamma firma bo'yicha</h2>
+    <div class="seg" role="group" aria-label="To'lov turi">
+      <button type="button" data-rpm="all" aria-pressed="true">Hammasi</button>
+      <button type="button" data-rpm="naqd" aria-pressed="false">Naqd</button>
+      <button type="button" data-rpm="perechisleniya" aria-pressed="false">Perechisleniya</button>
+    </div>
+    <div class="period-bar row" style="align-items:center">
+      <select id="rpSel" aria-label="Davr" style="width:auto"></select>
+      <span class="custom" id="rpCustom" hidden><input type="date" id="rpFrom" aria-label="Boshlanishi" style="width:auto"> – <input type="date" id="rpTo" aria-label="Oxiri" style="width:auto"></span>
+      <span class="hint example" id="rpRange"></span>
+    </div>
+    <div class="rpsum">
+      <div class="main"><div class="k" id="rpLabel">Jami to'langan</div><div class="v num" id="rpTotal">0</div><div class="hint example" id="rpCount"></div></div>
+      <div><div class="k">Naqd</div><div class="v num" id="rpCash">0</div></div>
+      <div><div class="k">Perechisleniya</div><div class="v num" id="rpBank">0</div></div>
+    </div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Firma</th><th class="r">Naqd $</th><th class="r">Perech. $</th><th class="r">Jami $</th><th class="r">ta</th></tr></thead>
+        <tbody id="rpFirms"></tbody>
+        <tfoot id="rpFoot"></tfoot>
+      </table>
+    </div>
+    <details id="rpListWrap"><summary class="example">Har bir to'lov ro'yxati</summary><div id="rpList" class="cards"></div></details>
   </section>
 
   <section class="balance" aria-label="Umumiy holat">
