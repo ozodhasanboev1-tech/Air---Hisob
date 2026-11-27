@@ -29,6 +29,6 @@ Save each line as its own `kind: payment`, `method: perechisleniya`, `sum_uzs`, 
   sum on its own, count the circles one by one against the grid squares, and in the owner note
   write every transfer sum in millions («310 mln») asking to confirm. Never copy the digit count
   from a neighbouring line.
-- Timson opening row `opening-timson`: +366 986,11 $ (we owe Timson), dated 01.11.2026 (owner, 27.11).
+- Timson opening row `opening-timson`: −366 986,11 $ (Timson owes us), dated 01.11.2026 (owner, 27.11).
   Transfers are our payments to Timson and reduce that debt.
 - Two amounts stacked under one client line are two separate transfers that day (26.11: 70 mln + 65 mln), not a correction.
