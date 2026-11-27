@@ -30,4 +30,4 @@ Save each line as its own `kind: payment`, `method: perechisleniya`, `sum_uzs`, 
   doubtful. (27.11.2026: 65 mln was saved as 650 mln.)
 - Timson has an opening row `opening-timson` dated 11.11.2026, but that sverka date was assumed.
   Save transfers dated before it too (owner confirmed 27.11), and mention them to the owner.
-- A crossed-out number is replaced by the one under it.
+- Two amounts stacked under one client line are two separate transfers that day (26.11: 70 mln + 65 mln), not a correction.
