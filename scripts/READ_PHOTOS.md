@@ -24,10 +24,11 @@ Timson (Китай) photos can be bank-transfer notes, not lists: «date / clien
 Save each line as its own `kind: payment`, `method: perechisleniya`, `sum_uzs`, `rate`,
 `amount = sum_uzs / rate` (2 decimals), note = client and contract.
 
-- Handwritten zeros run together. Never count the circles: read the leading digits and check the
-  dollar result. A single transfer is usually a few thousand dollars (65 mln / 12020 = 5 407 $).
-  If `amount` comes out above 15 000 $, assume a 10x misread, recount, and list it to the owner as
-  doubtful. (27.11.2026: 65 mln was saved as 650 mln.)
+- Handwritten zeros run together, so the number of zeros is NOT certain. Sums differ a lot
+  (27.11.2026 page: 35 mln, 310 mln, 70 mln, 65 mln), so no size rule can fix them. Zoom in on each
+  sum on its own, count the circles one by one against the grid squares, and in the owner note
+  write every transfer sum in millions («310 mln») asking to confirm. Never copy the digit count
+  from a neighbouring line.
 - Timson has an opening row `opening-timson` dated 11.11.2026, but that sverka date was assumed.
   Save transfers dated before it too (owner confirmed 27.11), and mention them to the owner.
 - Two amounts stacked under one client line are two separate transfers that day (26.11: 70 mln + 65 mln), not a correction.
