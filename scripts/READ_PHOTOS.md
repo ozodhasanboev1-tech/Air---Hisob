@@ -17,3 +17,17 @@ empty shipment with note «📷 o'qilmagan rasm». A scheduled Claude session re
    final note to the owner.
 
 Never touch a shipment that already has items. Never print secret values.
+
+## Money transfers (perechisleniya) on photos
+
+Timson (Китай) photos can be bank-transfer notes, not lists: «date / client N…/R / so'm sum / rate».
+Save each line as its own `kind: payment`, `method: perechisleniya`, `sum_uzs`, `rate`,
+`amount = sum_uzs / rate` (2 decimals), note = client and contract.
+
+- Handwritten zeros run together. Never count the circles: read the leading digits and check the
+  dollar result. A single transfer is usually a few thousand dollars (65 mln / 12020 = 5 407 $).
+  If `amount` comes out above 15 000 $, assume a 10x misread, recount, and list it to the owner as
+  doubtful. (27.11.2026: 65 mln was saved as 650 mln.)
+- Timson has an opening row `opening-timson` (sverka on 11.11.2026). Transfers dated on or before
+  that date are already inside it: do not save them, just tell the owner.
+- A crossed-out number is replaced by the one under it.
